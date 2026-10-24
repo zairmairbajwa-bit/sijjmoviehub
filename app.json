@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "sijjmoviehub",
+    "slug": "sijjmoviehub",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#111111"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#111111"
+      },
+      "package": "com.sijj.moviehub"
+    },
+    "plugins": [
+      "expo-status-bar"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ea6e1613-70b6-42da-8dab-511de4442d18"
+      }
+    },
+    "owner": "sijj"
+  }
+}
