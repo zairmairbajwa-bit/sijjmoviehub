@@ -20,7 +20,12 @@ scraper = cloudscraper.create_scraper(
     }
 )
 
-BASE_URL = "https://vegamovies.mex"
+# Multiple backup streaming domains list
+DOMAIN_LIST = [
+    "https://vegamovies.mex",
+    "https://dotmovies.to",
+    "https://katmoviehd.nz"
+]
 
 INITIAL_MOVIES = [
     {"title": "Avatar: The Way of Water", "id": "76600", "year": "2022"},
@@ -48,55 +53,64 @@ def scrape_hindi_stream(movie_title, release_year):
     print(f"[Scraper] Searching for movie: {movie_title} ({release_year})")
     search_query = f"{movie_title} {release_year} Hindi"
     encoded_query = urllib.parse.quote(search_query)
-    search_url = f"{BASE_URL}/?s={encoded_query}"
     
-    try:
-        response = scraper.get(search_url, timeout=15)
-        if response.status_code != 200:
-            print(f"[Scraper] Cloudflare block or status code {response.status_code} for {movie_title}")
-            return None
+    # Loop through multiple domains until a working one is found
+    for base_url in DOMAIN_LIST:
+        search_url = f"{base_url}/?s={encoded_query}"
+        try:
+            print(f"[Scraper] Trying domain: {base_url}")
+            response = scraper.get(search_url, timeout=12)
             
-        soup = BeautifulSoup(response.text, 'html.parser')
-        articles = soup.find_all('h3', class_='entry-title') or soup.find_all('h2', class_='entry-title')
-        if not articles:
-            print(f"[Scraper] No search result articles found on site for {movie_title}")
-            return None
+            if response.status_code != 200:
+                print(f"[Scraper] Status code {response.status_code} on {base_url}, trying next...")
+                continue
+                
+            soup = BeautifulSoup(response.text, 'html.parser')
+            articles = soup.find_all('h3', class_='entry-title') or soup.find_all('h2', class_='entry-title') or soup.find_all('div', class_='result-item')
+            if not articles:
+                print(f"[Scraper] No articles found on {base_url}, trying next...")
+                continue
+                
+            target_page_url = None
+            for article in articles:
+                link_tag = article.find('a')
+                if link_tag and link_tag.has_attr('href'):
+                    post_title = link_tag.get_text().lower()
+                    if movie_title.lower() in post_title:
+                        target_page_url = link_tag['href']
+                        break
+                        
+            if not target_page_url and articles:
+                first_link = articles[0].find('a')
+                if first_link and first_link.has_attr('href'):
+                    target_page_url = first_link['href']
+
+            if not target_page_url:
+                continue
+
+            print(f"[Scraper] Opening target post page: {target_page_url}")
+            movie_page_response = scraper.get(target_page_url, timeout=12)
+            movie_soup = BeautifulSoup(movie_page_response.text, 'html.parser')
             
-        target_page_url = None
-        for article in articles:
-            link_tag = article.find('a')
-            if link_tag:
-                post_title = link_tag.get_text().lower()
-                if movie_title.lower() in post_title:
-                    target_page_url = link_tag['href']
+            final_stream_url = None
+            for a_tag in movie_soup.find_all('a', href=True):
+                href_url = a_tag['href']
+                if "hubcloud" in href_url or "pixeldrain" in href_url or "vcloud" in href_url or "drive" in href_url:
+                    if "hubcloud" in href_url and "drive" in href_url:
+                        continue
+                    final_stream_url = href_url
                     break
                     
-        if not target_page_url:
-            target_page_url = articles[0].find('a')['href']
+            if final_stream_url:
+                print(f"[Scraper] Link found successfully! -> {final_stream_url}")
+                return final_stream_url
 
-        print(f"[Scraper] Opening target post page: {target_page_url}")
-        movie_page_response = scraper.get(target_page_url, timeout=15)
-        movie_soup = BeautifulSoup(movie_page_response.text, 'html.parser')
-        
-        final_stream_url = None
-        for a_tag in movie_soup.find_all('a', href=True):
-            href_url = a_tag['href']
-            if "hubcloud" in href_url or "pixeldrain" in href_url or "vcloud" in href_url or "drive" in href_url:
-                if "hubcloud" in href_url and "drive" in href_url:
-                    continue
-                final_stream_url = href_url
-                break
-                
-        if final_stream_url:
-            print(f"[Scraper] Link found! -> {final_stream_url}")
-        else:
-            print(f"[Scraper] No matching cloud stream link found inside the post.")
+        except Exception as e:
+            print(f"[Scraper] Error with domain {base_url}: {str(e)}")
+            continue
             
-        return final_stream_url
-
-    except Exception as e:
-        print(f"[Scraper] Error during scraping for {movie_title}: {str(e)}")
-        return None
+    print(f"[Scraper] Failed to find stream for {movie_title} across all domains.")
+    return None
 
 def push_to_firebase(tmdb_id, title, stream_url):
     node_url = f"https://sijjmoviehub-default-rtdb.firebaseio.com/movies/{tmdb_id}.json"
@@ -117,7 +131,7 @@ def push_to_firebase(tmdb_id, title, stream_url):
 
 def background_automation():
     print("[Bot] Background Automation loop started.")
-    time.sleep(2)
+    time.sleep(3)
     
     # 1. Process initial movies immediately
     print("[Bot] Processing initial movie list...")
@@ -160,7 +174,6 @@ def background_automation():
         print("[Bot] Batch complete. Waiting 15 minutes before next check...")
         time.sleep(900)
 
-# Global thread launcher taaky Gunicorn worker start hone ke sath hi background bot chal paray
 def start_background_bot():
     global bot_started
     try:
@@ -178,8 +191,8 @@ start_background_bot()
 
 @app.route('/')
 def home():
-    start_background_bot() # Double safety taaky koi bhi HTTP hit aane par bhi bot active ho jaye
-    return jsonify({"status": "Bot Automation is Active and Running!"})
+    start_background_bot()
+    return jsonify({"status": "Multi-Domain Bot Automation is Active and Running!"})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
