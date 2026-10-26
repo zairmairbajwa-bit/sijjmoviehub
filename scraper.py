@@ -126,7 +126,7 @@ def push_to_firebase(tmdb_id, title, stream_url):
 def main():
     print("[Bot] GitHub Actions Automation started.")
     
-    # Process initial movies
+    # 1. Process initial movies
     for movie in INITIAL_MOVIES:
         title = movie["title"]
         tmdb_id = movie["id"]
@@ -137,7 +137,7 @@ def main():
             push_to_firebase(tmdb_id, title, stream_link)
         time.sleep(random.randint(2, 4))
 
-    # Process trending movies
+    # 2. Process trending movies
     movies = fetch_trending_from_tmdb()
     for item in movies[:10]:
         title = item.get('title') or item.get('name')
