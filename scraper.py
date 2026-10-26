@@ -22,7 +22,6 @@ scraper = cloudscraper.create_scraper(
 
 BASE_URL = "https://vegamovies.mex"
 
-# Default initial list of popular Hollywood movies so bot has items to scrape immediately on boot
 INITIAL_MOVIES = [
     {"title": "Avatar: The Way of Water", "id": "76600", "year": "2022"},
     {"title": "Avengers: Endgame", "id": "299534", "year": "2019"},
@@ -117,10 +116,11 @@ def push_to_firebase(tmdb_id, title, stream_url):
         print(f"[Firebase] Firebase connection error: {e}")
 
 def background_automation():
-    print("[Bot] Background Automation started successfully.")
+    print("[Bot] Background Automation loop started.")
+    time.sleep(2)
     
-    # 1. Pehle default initial list process karega taaky foran links push ho sakein
-    print("[Bot] Processing default initial movie list...")
+    # 1. Process initial movies immediately
+    print("[Bot] Processing initial movie list...")
     for movie in INITIAL_MOVIES:
         title = movie["title"]
         tmdb_id = movie["id"]
@@ -132,9 +132,9 @@ def background_automation():
         else:
             print(f"[Bot] Skipping initial movie {title} due to missing stream.")
         
-        time.sleep(random.randint(3, 6))
+        time.sleep(random.randint(2, 4))
 
-    # 2. Phir continuous loop mein TMDB trending movies check karega
+    # 2. Continuous trending check loop
     while True:
         print("[Bot] Starting new TMDB trending batch check...")
         movies = fetch_trending_from_tmdb()
@@ -155,19 +155,31 @@ def background_automation():
             else:
                 print(f"[Bot] No stream found for {title}.")
             
-            sleep_time = random.randint(5, 10)
-            time.sleep(sleep_time)
+            time.sleep(random.randint(5, 8))
             
         print("[Bot] Batch complete. Waiting 15 minutes before next check...")
         time.sleep(900)
 
+# Global thread launcher taaky Gunicorn worker start hone ke sath hi background bot chal paray
+def start_background_bot():
+    global bot_started
+    try:
+        if not bot_started:
+            bot_started = True
+            t = threading.Thread(target=background_automation)
+            t.daemon = True
+            t.start()
+            print("[System] Background automation thread successfully triggered.")
+    except Exception as e:
+        print(f"[System] Error starting background thread: {e}")
+
+bot_started = False
+start_background_bot()
+
 @app.route('/')
 def home():
+    start_background_bot() # Double safety taaky koi bhi HTTP hit aane par bhi bot active ho jaye
     return jsonify({"status": "Bot Automation is Active and Running!"})
 
 if __name__ == '__main__':
-    t = threading.Thread(target=background_automation)
-    t.daemon = True
-    t.start()
-    
     app.run(host='0.0.0.0', port=5000)
