@@ -1,6 +1,7 @@
 from flask import Flask, jsonify
 import threading
 import time
+import random
 import urllib.parse
 import cloudscraper
 from bs4 import BeautifulSoup
@@ -39,6 +40,7 @@ def scrape_hindi_stream(movie_title, release_year):
     try:
         response = scraper.get(search_url, timeout=15)
         if response.status_code != 200:
+            print(f"Cloudflare block or status code {response.status_code} for {movie_title}")
             return None
             
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -93,9 +95,8 @@ def push_to_firebase(tmdb_id, title, stream_url):
         print(f"Firebase connection error: {e}")
 
 def background_automation():
-    """Background thread jo continuously movies scrape kar ke Firebase update karega"""
-    print("Background Bot Automation started...")
-    time.sleep(10) # Server start hone ka wait
+    print("Safe Background Bot Automation started...")
+    time.sleep(5)
     while True:
         movies = fetch_trending_from_tmdb()
         print(f"Fetched {len(movies)} items from TMDB to process.")
@@ -118,21 +119,20 @@ def background_automation():
             else:
                 print(f"No Hindi stream found for {title}.")
             
-            time.sleep(5)
+            # Har request ke darmiyan 5 se 10 second ka random gap taaky ban ya block na ho
+            sleep_time = random.randint(5, 10)
+            time.sleep(sleep_time)
             
-        print("Batch complete. Waiting 2 hours before next automation run...")
-        time.sleep(7200)
+        print("Batch complete. Waiting 30 minutes before next check...")
+        time.sleep(1800) # 30 min ka safe break taaky server normal rahay
 
-# Flask route taaky Render ka web server khush rahay aur port bind ho jaye
 @app.route('/')
 def home():
-    return jsonify({"status": "Bot Server is Alive and Background Automation is Running!"})
+    return jsonify({"status": "Safe Bot Server is Running!"})
 
 if __name__ == '__main__':
-    # Background thread start karna taaky Flask server block na ho
     t = threading.Thread(target=background_automation)
     t.daemon = True
     t.start()
     
-    # Flask app run karna taaky Render ka port scan pass ho jaye
     app.run(host='0.0.0.0', port=5000)
