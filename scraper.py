@@ -1,16 +1,16 @@
+from flask import Flask, jsonify
+import threading
 import time
 import urllib.parse
 import cloudscraper
 from bs4 import BeautifulSoup
 import requests
 
-# Firebase Realtime Database URL (apki Firebase console wali URL)
-FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies.json"
+app = Flask(__name__)
 
-# TMDB API Key (movies ki details aur IDs fetch karne ke liye)
+FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies.json"
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 
-# Advanced Cloudflare bypass setup
 scraper = cloudscraper.create_scraper(
     browser={
         'browser': 'chrome',
@@ -22,7 +22,6 @@ scraper = cloudscraper.create_scraper(
 BASE_URL = "https://vegamovies.mex"
 
 def fetch_trending_from_tmdb():
-    """TMDB se trending/latest movies ki list fetch karta hai taaky unhe scrape kiya ja sakay"""
     url = f"https://api.themoviedb.org/3/trending/all/day?api_key={TMDB_API_KEY}&language=en-US"
     try:
         response = requests.get(url, timeout=10)
@@ -33,7 +32,6 @@ def fetch_trending_from_tmdb():
         return []
 
 def scrape_hindi_stream(movie_title, release_year):
-    """Vegamovies se movie search kar ke direct cloud stream link nikalta hai"""
     search_query = f"{movie_title} {release_year} Hindi"
     encoded_query = urllib.parse.quote(search_query)
     search_url = f"{BASE_URL}/?s={encoded_query}"
@@ -60,7 +58,6 @@ def scrape_hindi_stream(movie_title, release_year):
         if not target_page_url:
             target_page_url = articles[0].find('a')['href']
 
-        # Movie page open karna
         movie_page_response = scraper.get(target_page_url, timeout=15)
         movie_soup = BeautifulSoup(movie_page_response.text, 'html.parser')
         
@@ -80,7 +77,6 @@ def scrape_hindi_stream(movie_title, release_year):
         return None
 
 def push_to_firebase(tmdb_id, title, stream_url):
-    """Scraped data ko direct Firebase Realtime Database mein patch/push karta hai"""
     node_url = f"https://sijjmoviehub-default-rtdb.firebaseio.com/movies/{tmdb_id}.json"
     payload = {
         "title": title,
@@ -96,8 +92,10 @@ def push_to_firebase(tmdb_id, title, stream_url):
     except Exception as e:
         print(f"Firebase connection error: {e}")
 
-def run_automation_loop():
-    print("Background Scraper Automation started...")
+def background_automation():
+    """Background thread jo continuously movies scrape kar ke Firebase update karega"""
+    print("Background Bot Automation started...")
+    time.sleep(10) # Server start hone ka wait
     while True:
         movies = fetch_trending_from_tmdb()
         print(f"Fetched {len(movies)} items from TMDB to process.")
@@ -120,11 +118,21 @@ def run_automation_loop():
             else:
                 print(f"No Hindi stream found for {title}.")
             
-            # Har request ke darmiyan chhota pause taaky IP block na ho
             time.sleep(5)
             
         print("Batch complete. Waiting 2 hours before next automation run...")
-        time.sleep(7200) # Har 2 ghante baad dobara run hoga
+        time.sleep(7200)
+
+# Flask route taaky Render ka web server khush rahay aur port bind ho jaye
+@app.route('/')
+def home():
+    return jsonify({"status": "Bot Server is Alive and Background Automation is Running!"})
 
 if __name__ == '__main__':
-    run_automation_loop()
+    # Background thread start karna taaky Flask server block na ho
+    t = threading.Thread(target=background_automation)
+    t.daemon = True
+    t.start()
+    
+    # Flask app run karna taaky Render ka port scan pass ho jaye
+    app.run(host='0.0.0.0', port=5000)
