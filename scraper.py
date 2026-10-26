@@ -22,17 +22,31 @@ scraper = cloudscraper.create_scraper(
 
 BASE_URL = "https://vegamovies.mex"
 
+# Default initial list of popular Hollywood movies so bot has items to scrape immediately on boot
+INITIAL_MOVIES = [
+    {"title": "Avatar: The Way of Water", "id": "76600", "year": "2022"},
+    {"title": "Avengers: Endgame", "id": "299534", "year": "2019"},
+    {"title": "Oppenheimer", "id": "872585", "year": "2023"},
+    {"title": "Interstellar", "id": "157336", "year": "2014"},
+    {"title": "The Batman", "id": "414906", "year": "2022"},
+    {"title": "John Wick Chapter 4", "id": "603692", "year": "2023"}
+]
+
 def fetch_trending_from_tmdb():
+    print("[TMDB] Fetching trending movies from TMDB API...")
     url = f"https://api.themoviedb.org/3/trending/all/day?api_key={TMDB_API_KEY}&language=en-US"
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
-        return data.get("results", [])
+        results = data.get("results", [])
+        print(f"[TMDB] Successfully fetched {len(results)} items.")
+        return results
     except Exception as e:
-        print(f"Error fetching TMDB trending list: {e}")
+        print(f"[TMDB] Error fetching trending list: {e}")
         return []
 
 def scrape_hindi_stream(movie_title, release_year):
+    print(f"[Scraper] Searching for movie: {movie_title} ({release_year})")
     search_query = f"{movie_title} {release_year} Hindi"
     encoded_query = urllib.parse.quote(search_query)
     search_url = f"{BASE_URL}/?s={encoded_query}"
@@ -40,12 +54,13 @@ def scrape_hindi_stream(movie_title, release_year):
     try:
         response = scraper.get(search_url, timeout=15)
         if response.status_code != 200:
-            print(f"Cloudflare block or status code {response.status_code} for {movie_title}")
+            print(f"[Scraper] Cloudflare block or status code {response.status_code} for {movie_title}")
             return None
             
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = soup.find_all('h3', class_='entry-title') or soup.find_all('h2', class_='entry-title')
         if not articles:
+            print(f"[Scraper] No search result articles found on site for {movie_title}")
             return None
             
         target_page_url = None
@@ -60,6 +75,7 @@ def scrape_hindi_stream(movie_title, release_year):
         if not target_page_url:
             target_page_url = articles[0].find('a')['href']
 
+        print(f"[Scraper] Opening target post page: {target_page_url}")
         movie_page_response = scraper.get(target_page_url, timeout=15)
         movie_soup = BeautifulSoup(movie_page_response.text, 'html.parser')
         
@@ -72,10 +88,15 @@ def scrape_hindi_stream(movie_title, release_year):
                 final_stream_url = href_url
                 break
                 
+        if final_stream_url:
+            print(f"[Scraper] Link found! -> {final_stream_url}")
+        else:
+            print(f"[Scraper] No matching cloud stream link found inside the post.")
+            
         return final_stream_url
 
     except Exception as e:
-        print(f"Scraper error for {movie_title}: {str(e)}")
+        print(f"[Scraper] Error during scraping for {movie_title}: {str(e)}")
         return None
 
 def push_to_firebase(tmdb_id, title, stream_url):
@@ -85,21 +106,38 @@ def push_to_firebase(tmdb_id, title, stream_url):
         "is_hindi": True,
         "url": stream_url
     }
+    print(f"[Firebase] Pushing data for '{title}' (ID: {tmdb_id})...")
     try:
         response = requests.patch(node_url, json=payload, timeout=10)
         if response.status_code == 200:
-            print(f"Successfully pushed to Firebase: {title} (ID: {tmdb_id})")
+            print(f"[Firebase] Firebase push successful for {title}!")
         else:
-            print(f"Failed to push {title}. Status code: {response.status_code}")
+            print(f"[Firebase] Failed to push {title}. Status code: {response.status_code}")
     except Exception as e:
-        print(f"Firebase connection error: {e}")
+        print(f"[Firebase] Firebase connection error: {e}")
 
 def background_automation():
-    print("Safe Background Bot Automation started...")
-    time.sleep(5)
+    print("[Bot] Background Automation started successfully.")
+    
+    # 1. Pehle default initial list process karega taaky foran links push ho sakein
+    print("[Bot] Processing default initial movie list...")
+    for movie in INITIAL_MOVIES:
+        title = movie["title"]
+        tmdb_id = movie["id"]
+        year = movie["year"]
+        
+        stream_link = scrape_hindi_stream(title, year)
+        if stream_link:
+            push_to_firebase(tmdb_id, title, stream_link)
+        else:
+            print(f"[Bot] Skipping initial movie {title} due to missing stream.")
+        
+        time.sleep(random.randint(3, 6))
+
+    # 2. Phir continuous loop mein TMDB trending movies check karega
     while True:
+        print("[Bot] Starting new TMDB trending batch check...")
         movies = fetch_trending_from_tmdb()
-        print(f"Fetched {len(movies)} items from TMDB to process.")
         
         for item in movies:
             title = item.get('title') or item.get('name')
@@ -110,25 +148,22 @@ def background_automation():
             if not title or not tmdb_id:
                 continue
 
-            print(f"Checking stream for: {title} ({year})")
             stream_link = scrape_hindi_stream(title, year)
             
             if stream_link:
-                print(f"Found Hindi Stream! Uploading...")
                 push_to_firebase(tmdb_id, title, stream_link)
             else:
-                print(f"No Hindi stream found for {title}.")
+                print(f"[Bot] No stream found for {title}.")
             
-            # Har request ke darmiyan 5 se 10 second ka random gap taaky ban ya block na ho
             sleep_time = random.randint(5, 10)
             time.sleep(sleep_time)
             
-        print("Batch complete. Waiting 30 minutes before next check...")
-        time.sleep(1800) # 30 min ka safe break taaky server normal rahay
+        print("[Bot] Batch complete. Waiting 15 minutes before next check...")
+        time.sleep(900)
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Safe Bot Server is Running!"})
+    return jsonify({"status": "Bot Automation is Active and Running!"})
 
 if __name__ == '__main__':
     t = threading.Thread(target=background_automation)
