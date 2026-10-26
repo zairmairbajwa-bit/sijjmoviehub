@@ -1,13 +1,9 @@
-from flask import Flask, jsonify
-import threading
 import time
 import random
 import urllib.parse
 import cloudscraper
 from bs4 import BeautifulSoup
 import requests
-
-app = Flask(__name__)
 
 FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies.json"
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
@@ -20,7 +16,6 @@ scraper = cloudscraper.create_scraper(
     }
 )
 
-# Multiple backup streaming domains list
 DOMAIN_LIST = [
     "https://vegamovies.mex",
     "https://dotmovies.to",
@@ -54,7 +49,6 @@ def scrape_hindi_stream(movie_title, release_year):
     search_query = f"{movie_title} {release_year} Hindi"
     encoded_query = urllib.parse.quote(search_query)
     
-    # Loop through multiple domains until a working one is found
     for base_url in DOMAIN_LIST:
         search_url = f"{base_url}/?s={encoded_query}"
         try:
@@ -129,12 +123,10 @@ def push_to_firebase(tmdb_id, title, stream_url):
     except Exception as e:
         print(f"[Firebase] Firebase connection error: {e}")
 
-def background_automation():
-    print("[Bot] Background Automation loop started.")
-    time.sleep(3)
+def main():
+    print("[Bot] GitHub Actions Automation started.")
     
-    # 1. Process initial movies immediately
-    print("[Bot] Processing initial movie list...")
+    # Process initial movies
     for movie in INITIAL_MOVIES:
         title = movie["title"]
         tmdb_id = movie["id"]
@@ -143,56 +135,23 @@ def background_automation():
         stream_link = scrape_hindi_stream(title, year)
         if stream_link:
             push_to_firebase(tmdb_id, title, stream_link)
-        else:
-            print(f"[Bot] Skipping initial movie {title} due to missing stream.")
-        
         time.sleep(random.randint(2, 4))
 
-    # 2. Continuous trending check loop
-    while True:
-        print("[Bot] Starting new TMDB trending batch check...")
-        movies = fetch_trending_from_tmdb()
+    # Process trending movies
+    movies = fetch_trending_from_tmdb()
+    for item in movies[:10]:
+        title = item.get('title') or item.get('name')
+        tmdb_id = item.get('id')
+        release_date = item.get('release_date') or item.get('first_air_date') or '2024'
+        year = release_date.split('-')[0]
         
-        for item in movies:
-            title = item.get('title') or item.get('name')
-            tmdb_id = item.get('id')
-            release_date = item.get('release_date') or item.get('first_air_date') or '2024'
-            year = release_date.split('-')[0]
-            
-            if not title or not tmdb_id:
-                continue
+        if not title or not tmdb_id:
+            continue
 
-            stream_link = scrape_hindi_stream(title, year)
-            
-            if stream_link:
-                push_to_firebase(tmdb_id, title, stream_link)
-            else:
-                print(f"[Bot] No stream found for {title}.")
-            
-            time.sleep(random.randint(5, 8))
-            
-        print("[Bot] Batch complete. Waiting 15 minutes before next check...")
-        time.sleep(900)
-
-def start_background_bot():
-    global bot_started
-    try:
-        if not bot_started:
-            bot_started = True
-            t = threading.Thread(target=background_automation)
-            t.daemon = True
-            t.start()
-            print("[System] Background automation thread successfully triggered.")
-    except Exception as e:
-        print(f"[System] Error starting background thread: {e}")
-
-bot_started = False
-start_background_bot()
-
-@app.route('/')
-def home():
-    start_background_bot()
-    return jsonify({"status": "Multi-Domain Bot Automation is Active and Running!"})
+        stream_link = scrape_hindi_stream(title, year)
+        if stream_link:
+            push_to_firebase(tmdb_id, title, stream_link)
+        time.sleep(random.randint(3, 6))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    main()
