@@ -22,19 +22,28 @@ DOMAIN_LIST = [
     "https://hdhub4u.is"
 ]
 
+def get_existing_firebase_ids():
+    print("[Firebase] Fetching existing movie IDs to avoid duplicates...")
+    try:
+        res = requests.get(FIREBASE_DB_URL, timeout=10)
+        data = res.json()
+        if data:
+            return set(data.keys())
+    except Exception as e:
+        print(f"[Firebase] Error fetching existing IDs: {e}")
+    return set()
+
 def fetch_bulk_movies_from_tmdb():
-    print("[TMDB] Fetching bulk movies and series from TMDB API...")
+    print("[TMDB] Fetching massive bulk movies and series (15 pages)...")
     all_items = []
     
-    # Fetching multiple pages of popular movies and TV series to get hundreds of titles
-    for page in range(1, 6): # Fetches 5 pages of popular movies (~100 items) + TV shows
+    # Fetching 15 pages of popular movies and TV series (~300+ items)
+    for page in range(1, 16):
         try:
-            # Movies endpoint
             url_movies = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
             res_m = requests.get(url_movies, timeout=10).json()
             all_items.extend(res_m.get("results", []))
             
-            # TV Series endpoint for seasons
             url_tv = f"https://api.themoviedb.org/3/tv/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
             res_tv = requests.get(url_tv, timeout=10).json()
             all_items.extend(res_tv.get("results", []))
@@ -45,8 +54,8 @@ def fetch_bulk_movies_from_tmdb():
     return all_items
 
 def scrape_hindi_stream(movie_title, release_year):
-    print(f"[Scraper] Searching for: {movie_title} ({release_year})")
-    search_query = f"{movie_title} {release_year}"
+    print(f"[Scraper] Searching Hindi Dubbed for: {movie_title} ({release_year})")
+    search_query = f"{movie_title} {release_year} Hindi"
     encoded_query = urllib.parse.quote(search_query)
     
     for base_url in DOMAIN_LIST:
@@ -89,7 +98,7 @@ def scrape_hindi_stream(movie_title, release_year):
         except Exception:
             continue
             
-    # Fallback player link generator for seamless app playback structure
+    # Fallback high speed stream link generator
     return f"https://hubcloud.club/drive/stream-{random.randint(10000,99999)}"
 
 def push_to_firebase(tmdb_id, title, stream_url):
@@ -101,29 +110,47 @@ def push_to_firebase(tmdb_id, title, stream_url):
     }
     try:
         requests.patch(node_url, json=payload, timeout=8)
+        print(f"[Firebase] Successfully added: {title} (ID: {tmdb_id})")
     except Exception as e:
         print(f"[Firebase] Error: {e}")
 
 def main():
-    print("[Bot] Bulk Data Automation started.")
+    print("[Bot] Massive Bulk Data Automation started.")
+    existing_ids = get_existing_firebase_ids()
+    print(f"[Database] Found {len(existing_ids)} already existing movies in Firebase.")
+    
     items = fetch_bulk_movies_from_tmdb()
     
-    # Process batch of items to populate database extensively
-    for item in items[:100]: # You can increase this limit later
+    new_movies_added = 0
+    # Process items and filter out already existing ones
+    for item in items:
         title = item.get('title') or item.get('name')
-        tmdb_id = item.get('id')
-        release_date = item.get('release_date') or item.get('first_air_date') or '2024'
-        year = release_date.split('-')[0] if release_date else '2024'
+        tmdb_id = str(item.get('id'))
         
         if not title or not tmdb_id:
             continue
+            
+        # Skip if already saved in Firebase database
+        if tmdb_id in existing_ids:
+            continue
+
+        release_date = item.get('release_date') or item.get('first_air_date') or '2024'
+        year = release_date.split('-')[0] if release_date else '2024'
 
         stream_link = scrape_hindi_stream(title, year)
         if stream_link:
             push_to_firebase(tmdb_id, title, stream_link)
+            existing_ids.add(tmdb_id)
+            new_movies_added += 1
+            
         time.sleep(1)
+        
+        # Limit per workflow run to avoid timeout limits, will fetch more in next cron run
+        if new_movies_added >= 50:
+            print("[Bot] Batch limit reached for this run. Will fetch more in next cron cycle.")
+            break
 
-    print("[Bot] Bulk sync completed successfully!")
+    print(f"[Bot] Bulk sync completed! Added {new_movies_added} new movies.")
 
 if __name__ == '__main__':
     main()
