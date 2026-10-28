@@ -8,7 +8,6 @@ FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies"
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 
 def get_movie_details_from_tmdb(title):
-    """Fetches high-res poster, overview, and language details from TMDB API."""
     try:
         clean_search_title = re.sub(r'\s*\(\d{4}\)', '', title).strip()
         search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={requests.utils.quote(clean_search_title)}"
@@ -29,16 +28,19 @@ def get_movie_details_from_tmdb(title):
     return "https://via.placeholder.com/300x450?text=No+Poster", "en"
 
 def scrape_bulk_movies_and_series():
-    print("🚀 Starting Mega Bulk Scraper for SijjMoviesHub (Targeting 1000+ items)...")
+    print("🚀 Starting Mega Bulk Scraper (Hollywood, Bollywood & Punjabi)...")
     
-    # Cinemeta catalogs for multiple genres: Movies & Series (Bollywood, Hollywood, Punjabi)
+    # Expanded Catalogs including Global, Bollywood, and Punjabi endpoints
     catalogs = [
         "https://v3-cinemeta.strem.io/catalog/movie/top/skip=0.json",
         "https://v3-cinemeta.strem.io/catalog/movie/top/skip=100.json",
         "https://v3-cinemeta.strem.io/catalog/movie/top/skip=200.json",
-        "https://v3-cinemeta.strem.io/catalog/movie/top/skip=300.json",
         "https://v3-cinemeta.strem.io/catalog/series/top/skip=0.json",
-        "https://v3-cinemeta.strem.io/catalog/series/top/skip=100.json"
+        # Cinemeta Indian / Bollywood Catalogs
+        "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Hindi/skip=0.json",
+        "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Hindi/skip=100.json",
+        # Punjabi Cinema endpoint
+        "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Punjabi/skip=0.json"
     ]
     
     total_synced = 0
@@ -58,28 +60,27 @@ def scrape_bulk_movies_and_series():
             for item in metas:
                 title = item.get('name')
                 year = item.get('year')
+                genres = item.get('genres', [])
                 imdb_id = item.get('id')
                 
                 if not imdb_id or not title:
                     continue
 
-                # Fetch Poster and Original Language from TMDB
                 poster_url, orig_lang = get_movie_details_from_tmdb(title)
 
-                # Determine Category and Dubbing Tag based on title/language
                 lower_title = title.lower()
-                if any(word in lower_title for word in ['punjabi', 'jatt', 'rabia', 'punjab']):
+                genre_str = " ".join(genres).lower()
+
+                if 'punjabi' in genre_str or 'punjabi' in lower_title or 'jatt' in lower_title:
                     category = "Punjabi Movies"
                     clean_title = f"{title} ({year})" if year else title
-                elif orig_lang in ['hi', 'bn', 'ur'] or any(word in lower_title for word in ['hindi', 'bollywood', 'dubbed']):
+                elif orig_lang in ['hi', 'ur'] or 'hindi' in genre_str or 'bollywood' in genre_str or 'hindi' in lower_title:
                     category = "Bollywood & Hindi"
                     clean_title = f"{title} (Hindi) ({year})" if year else f"{title} (Hindi)"
                 else:
-                    # Hollywood / International: Check if Hindi Dubbed version is popular/available
                     category = "Hollywood / Dual Audio"
                     clean_title = f"{title} (Hindi Dubbed) ({year})" if year else f"{title} (Hindi Dubbed)"
 
-                # Query Torrentio API for Magnet Link
                 torrentio_stream_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
                 try:
                     stream_res = requests.get(torrentio_stream_url, timeout=10)
@@ -116,7 +117,7 @@ def scrape_bulk_movies_and_series():
                 except Exception as inner_err:
                     print(f"⚠️ Error stream fetch for {clean_title}: {inner_err}")
 
-                time.sleep(0.3) # Fast execution to scrape thousands safely
+                time.sleep(0.3)
 
         except Exception as e:
             print(f"❌ Error in catalog batch: {e}")
