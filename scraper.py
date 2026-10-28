@@ -2,138 +2,78 @@ import os
 import re
 import time
 import requests
-import cloudscraper
-from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
-BASE_URL = "https://vegamovies.network"
-CATEGORY_PATHS = [
-    "/hindi-dubbed/",
-    "/dual-audio-movies/"
-]
+# YTS Public API Endpoint (Unlimited, No Cloudflare blocks)
+YTS_API_URL = "https://yts.mx/api/v2/list_movies.json?sort_by=download_count&limit=50"
 FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies"
 
-def get_scraper():
-    """Creates a cloudscraper instance to bypass Cloudflare 403 blocks."""
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'desktop': True
-        }
-    )
-    return scraper
-
-def clean_movie_title(raw_title):
-    title = re.sub(r'(Download|Full Movie|Vegamovies|Dual Audio|Hindi|English|WEB-DL|HDRip|BluRay|480p|720p|1080p).*', '', raw_title, flags=re.IGNORECASE)
-    return title.strip(" -|[]()")
-
-def extract_magnet_from_page(scraper, post_url):
+def scrape_yts_movies():
+    print("🚀 Starting YTS API Movie Scraper...")
+    
     try:
-        response = scraper.get(post_url, timeout=20)
+        response = requests.get(YTS_API_URL, timeout=15)
         if response.status_code != 200:
-            return []
+            print(f"❌ Failed to fetch from YTS API. Status: {response.status_code}")
+            return
+
+        data = response.json()
+        movies = data.get('data', {}).get('movies', [])
         
-        soup = BeautifulSoup(response.text, 'html.parser')
-        magnets = set()
+        if not movies:
+            print("⚠️ No movies returned from YTS API.")
+            return
 
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if href.startswith('magnet:?xt=urn:btih:'):
-                magnets.add(href.strip())
+        print(f"🎬 Found {len(movies)} movies from YTS. Processing and syncing to Firebase...")
 
-        found_matches = re.findall(r'(magnet:\?xt=urn:btih:[a-zA-Z0-9]+[^"\s<]*)', response.text)
-        for m in found_matches:
-            magnets.add(m.strip())
+        for movie in movies:
+            title = movie.get('title_english') or movie.get('title')
+            year = movie.get('year')
+            clean_title = f"{title} ({year})" if year else title
+            
+            torrents = movie.get('torrents', [])
+            if not torrents:
+                continue
 
-        return list(magnets)
+            # Get the best quality magnet link (prefer 720p or 1080p)
+            best_torrent = torrents[0] # Default first
+            for t in torrents:
+                if '1080p' in t.get('quality', ''):
+                    best_torrent = t
+                    break
+
+            # Construct official magnet link using hash
+            torrent_hash = best_torrent.get('hash')
+            if not torrents or not torrent_hash:
+                continue
+
+            # Standard BitTorrent magnet link format
+            magnet_link = f"magnet:?xt=urn:btih:{torrent_hash}&dn={requests.utils.quote(clean_title)}"
+
+            print(f"🧲 Processing: {clean_title}")
+
+            movie_data = {
+                "title": clean_title,
+                "magnet": magnet_link,
+                "category": "Hollywood / English"
+            }
+
+            # Save directly to Firebase Realtime Database via REST API
+            safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', clean_title.lower())
+            firebase_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
+
+            db_res = requests.put(firebase_url, json=movie_data)
+            if db_res.status_code == 200:
+                print(f"✅ Synced '{clean_title}' to Firebase!")
+            else:
+                print(f"❌ Firebase save failed: {db_res.text}")
+
+            time.sleep(0.5)
+
+        print("\n🎉 YTS Movie scraping and syncing completed successfully!")
+
     except Exception as e:
-        print(f"❌ Error scraping inner page {post_url}: {e}")
-        return []
-
-def scrape_bulk_movies():
-    scraper = get_scraper()
-    scraped_count = 0
-    target_goal = 20  # Test ke liye 20 movies
-
-    print(f"🚀 Starting cloudscraper-powered crawler targeting {target_goal} items...")
-
-    for category in CATEGORY_PATHS:
-        page_num = 1
-        while scraped_count < target_goal:
-            target_page_url = f"{BASE_URL}{category}page/{page_num}/" if page_num > 1 else f"{BASE_URL}{category}"
-            print(f"🔍 Crawling Catalog Index: {target_page_url}")
-
-            try:
-                res = scraper.get(target_page_url, timeout=20)
-                print(f"📡 Response Status Code: {res.status_code}")
-                
-                if res.status_code != 200:
-                    print(f"⏹️ Blocked or reached end (Status {res.status_code}). Stopping category.")
-                    break
-
-                soup = BeautifulSoup(res.text, 'html.parser')
-                posts = soup.find_all(['article', 'div'], class_=re.compile('item|post'))
-                if not posts:
-                    posts = soup.find_all('a', href=True)
-
-                found_on_page = 0
-                for post in posts:
-                    if scraped_count >= target_goal:
-                        break
-
-                    link_tag = post.find('a', href=True) if post.name != 'a' else post
-                    if not link_tag:
-                        continue
-                    
-                    post_url = link_tag['href']
-                    if not post_url.startswith('http') or '/category/' in post_url or '/tag/' in post_url:
-                        continue
-
-                    raw_title = post.get('title') or link_tag.get('text') or "Unknown Title"
-                    clean_title = clean_movie_title(raw_title)
-
-                    if len(clean_title) < 2:
-                        continue
-
-                    print(f"\n[{scraped_count + 1}] Processing: {clean_title}")
-                    
-                    magnets = extract_magnet_from_page(scraper, post_url)
-                    if not magnets:
-                        print("⚠️ No magnet links found. Skipping.")
-                        time.sleep(1)
-                        continue
-
-                    print(f"🧲 Found {len(magnets)} permanent Magnet link(s).")
-
-                    movie_data = {
-                        "title": clean_title,
-                        "magnet": magnets if len(magnets) > 1 else magnets[0],
-                        "category": "Hindi Dubbed"
-                    }
-
-                    safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', clean_title.lower())
-                    firebase_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
-                    
-                    db_res = requests.put(firebase_url, json=movie_data)
-                    if db_res.status_code == 200:
-                        print(f"✅ Successfully synced '{clean_title}' to Firebase!")
-                    else:
-                        print(f"❌ Firebase save failed: {db_res.text}")
-
-                    scraped_count += 1
-                    found_on_page += 1
-                    time.sleep(2)
-
-                if found_on_page == 0:
-                    break
-
-                page_num += 1
-            except Exception as e:
-                print(f"❌ Error during pagination: {e}")
-                break
-
-    print(f"\n🎉 Bulk scraping completed! Total processed: {scraped_count} movies.")
+        print(f"❌ Error during YTS scraping: {e}")
 
 if __name__ == "__main__":
-    scrape_bulk_movies()
+    scrape_yts_movies()
