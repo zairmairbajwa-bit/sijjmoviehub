@@ -2,6 +2,7 @@ import os
 import re
 import time
 import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
@@ -12,34 +13,24 @@ CATEGORY_PATHS = [
 ]
 FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies"
 
-def get_session():
-    """Creates a requests Session with browser-like headers and TLS settings to bypass basic blocks."""
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0"
-    })
-    return session
+def get_scraper():
+    """Creates a cloudscraper instance to bypass Cloudflare 403 blocks."""
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
+    return scraper
 
 def clean_movie_title(raw_title):
     title = re.sub(r'(Download|Full Movie|Vegamovies|Dual Audio|Hindi|English|WEB-DL|HDRip|BluRay|480p|720p|1080p).*', '', raw_title, flags=re.IGNORECASE)
     return title.strip(" -|[]()")
 
-def extract_magnet_from_page(session, post_url):
+def extract_magnet_from_page(scraper, post_url):
     try:
-        response = session.get(post_url, timeout=15)
+        response = scraper.get(post_url, timeout=20)
         if response.status_code != 200:
             return []
         
@@ -61,11 +52,11 @@ def extract_magnet_from_page(session, post_url):
         return []
 
 def scrape_bulk_movies():
-    session = get_session()
+    scraper = get_scraper()
     scraped_count = 0
-    target_goal = 20  # Test ke liye 20 movies rakhi hain
+    target_goal = 20  # Test ke liye 20 movies
 
-    print(f"🚀 Starting bulk crawler targeting {target_goal} items...")
+    print(f"🚀 Starting cloudscraper-powered crawler targeting {target_goal} items...")
 
     for category in CATEGORY_PATHS:
         page_num = 1
@@ -74,7 +65,7 @@ def scrape_bulk_movies():
             print(f"🔍 Crawling Catalog Index: {target_page_url}")
 
             try:
-                res = session.get(target_page_url, timeout=15)
+                res = scraper.get(target_page_url, timeout=20)
                 print(f"📡 Response Status Code: {res.status_code}")
                 
                 if res.status_code != 200:
@@ -107,7 +98,7 @@ def scrape_bulk_movies():
 
                     print(f"\n[{scraped_count + 1}] Processing: {clean_title}")
                     
-                    magnets = extract_magnet_from_page(session, post_url)
+                    magnets = extract_magnet_from_page(scraper, post_url)
                     if not magnets:
                         print("⚠️ No magnet links found. Skipping.")
                         time.sleep(1)
