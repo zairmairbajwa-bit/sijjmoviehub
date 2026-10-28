@@ -1,156 +1,97 @@
-import time
-import random
-import urllib.parse
-import cloudscraper
-from bs4 import BeautifulSoup
 import requests
+from bs4 import BeautifulSoup
+import re
 
-FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies.json"
-TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
+# Configuration
+FIREBASE_BASE_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies"
+TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"  # Aapki app wali TMDb API key
 
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
-
-DOMAIN_LIST = [
-    "https://vegamovies.ist",
-    "https://dotmovies.baby",
-    "https://hdhub4u.is"
-]
-
-def get_existing_firebase_ids():
-    print("[Firebase] Fetching existing movie IDs to avoid duplicates...")
+def get_tmdb_id(movie_title):
+    """Helper function to search TMDb and get the official movie ID using title"""
     try:
-        res = requests.get(FIREBASE_DB_URL, timeout=10)
-        data = res.json()
-        if data:
-            return set(data.keys())
+        # Clean title for better search results (remove years or tags if present)
+        clean_title = re.sub(r'\b(19|20)\d{2}\b', '', movie_title).strip()
+        url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={requests.utils.quote(clean_title)}"
+        response = requests.get(url).json()
+        if response.get('results'):
+            return response['results'][0]['id']
     except Exception as e:
-        print(f"[Firebase] Error fetching existing IDs: {e}")
-    return set()
+        print(f"TMDb API Error: {e}")
+    return None
 
-def fetch_bulk_movies_from_tmdb():
-    print("[TMDB] Fetching massive bulk movies and series (15 pages)...")
-    all_items = []
-    
-    # Fetching 15 pages of popular movies and TV series (~300+ items)
-    for page in range(1, 16):
-        try:
-            url_movies = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
-            res_m = requests.get(url_movies, timeout=10).json()
-            all_items.extend(res_m.get("results", []))
-            
-            url_tv = f"https://api.themoviedb.org/3/tv/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
-            res_tv = requests.get(url_tv, timeout=10).json()
-            all_items.extend(res_tv.get("results", []))
-        except Exception as e:
-            print(f"[TMDB] Error fetching page {page}: {e}")
-            
-    print(f"[TMDB] Total collected items from TMDB: {len(all_items)}")
-    return all_items
-
-def scrape_hindi_stream(movie_title, release_year):
-    print(f"[Scraper] Searching Hindi Dubbed for: {movie_title} ({release_year})")
-    search_query = f"{movie_title} {release_year} Hindi"
-    encoded_query = urllib.parse.quote(search_query)
-    
-    for base_url in DOMAIN_LIST:
-        search_url = f"{base_url}/?s={encoded_query}"
-        try:
-            response = scraper.get(search_url, timeout=12)
-            if response.status_code != 200:
-                continue
-                
-            soup = BeautifulSoup(response.text, 'html.parser')
-            articles = soup.find_all('h3', class_='entry-title') or soup.find_all('h2', class_='entry-title') or soup.find_all('div', class_='result-item')
-            if not articles:
-                continue
-                
-            target_page_url = None
-            for article in articles:
-                link_tag = article.find('a')
-                if link_tag and link_tag.has_attr('href'):
-                    post_title = link_tag.get_text().lower()
-                    if movie_title.lower() in post_title:
-                        target_page_url = link_tag['href']
-                        break
-                        
-            if not target_page_url and articles:
-                first_link = articles[0].find('a')
-                if first_link and first_link.has_attr('href'):
-                    target_page_url = first_link['href']
-
-            if not target_page_url:
-                continue
-
-            movie_page_response = scraper.get(target_page_url, timeout=12)
-            movie_soup = BeautifulSoup(movie_page_response.text, 'html.parser')
-            
-            for a_tag in movie_soup.find_all('a', href=True):
-                href_url = a_tag['href']
-                if any(domain in href_url for domain in ["hubcloud", "pixeldrain", "vcloud", "filepress", "gdflix"]):
-                    return href_url
-
-        except Exception:
-            continue
-            
-    # Fallback high speed stream link generator
-    return f"https://hubcloud.club/drive/stream-{random.randint(10000,99999)}"
-
-def push_to_firebase(tmdb_id, title, stream_url):
-    node_url = f"https://sijjmoviehub-default-rtdb.firebaseio.com/movies/{tmdb_id}.json"
-    payload = {
-        "title": title,
-        "is_hindi": True,
-        "url": stream_url
+def scrape_vegamovies_torrent(page_url, manual_tmdb_id=None):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    try:
-        requests.patch(node_url, json=payload, timeout=8)
-        print(f"[Firebase] Successfully added: {title} (ID: {tmdb_id})")
-    except Exception as e:
-        print(f"[Firebase] Error: {e}")
-
-def main():
-    print("[Bot] Massive Bulk Data Automation started.")
-    existing_ids = get_existing_firebase_ids()
-    print(f"[Database] Found {len(existing_ids)} already existing movies in Firebase.")
     
-    items = fetch_bulk_movies_from_tmdb()
+    print(f"🔍 Scraping URL: {page_url}")
+    response = requests.get(page_url, headers=headers)
+    if response.status_code != 200:
+        print(f"❌ Failed to fetch page. Status code: {response.status_code}")
+        return
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    # 1. Extract Movie Title
+    title_tag = soup.find('h1', class_='entry-title') or soup.find('h1')
+    movie_title = title_tag.text.strip() if title_tag else "Unknown Movie"
+    # Clean up junk text from WordPress title
+    movie_title = re.sub(r'(Download|Watch Online|Full Movie|Vegamovies).*', '', movie_title, flags=re.IGNORECASE).strip()
+    print(f"🎬 Found Movie Title: {movie_title}")
+
+    # 2. Extract Magnet Link
+    magnet_link = None
     
-    new_movies_added = 0
-    # Process items and filter out already existing ones
-    for item in items:
-        title = item.get('title') or item.get('name')
-        tmdb_id = str(item.get('id'))
-        
-        if not title or not tmdb_id:
-            continue
-            
-        # Skip if already saved in Firebase database
-        if tmdb_id in existing_ids:
-            continue
-
-        release_date = item.get('release_date') or item.get('first_air_date') or '2024'
-        year = release_date.split('-')[0] if release_date else '2024'
-
-        stream_link = scrape_hindi_stream(title, year)
-        if stream_link:
-            push_to_firebase(tmdb_id, title, stream_link)
-            existing_ids.add(tmdb_id)
-            new_movies_added += 1
-            
-        time.sleep(1)
-        
-        # Limit per workflow run to avoid timeout limits, will fetch more in next cron run
-        if new_movies_added >= 50:
-            print("[Bot] Batch limit reached for this run. Will fetch more in next cron cycle.")
+    # Search in all <a> tags first
+    for a_tag in soup.find_all('a', href=True):
+        href = a_tag['href']
+        if href.startswith('magnet:?xt=urn:btih:'):
+            magnet_link = href
             break
 
-    print(f"[Bot] Bulk sync completed! Added {new_movies_added} new movies.")
+    # Fallback: Search inside raw HTML text via regex if <a> tag didn't contain it directly
+    if not magnet_link:
+        match = re.search(r'(magnet:\?xt=urn:btih:[a-zA-Z0-9]+[^"\s<]*)', response.text)
+        if match:
+            magnet_link = match.group(1)
 
-if __name__ == '__main__':
-    main()
+    if not magnet_link:
+        print("❌ No Magnet Link found on this Vegamovies page.")
+        return
+
+    print(f"🧲 Found Magnet Link: {magnet_link[:60]}...")
+
+    # 3. Get TMDb ID
+    tmdb_id = manual_tmdb_id
+    if not tmdb_id:
+        print("🔎 Searching TMDb ID automatically...")
+        tmdb_id = get_tmdb_id(movie_title)
+
+    if not tmdb_id:
+        print("⚠️ Could not find a matching TMDb ID. Skipping database save.")
+        return
+
+    print(f"🆔 TMDb ID: {tmdb_id}")
+
+    # 4. Save to Firebase Realtime Database
+    # Stored directly under the movie's TMDb ID node so the app matches it seamlessly
+    firebase_node_url = f"{FIREBASE_BASE_URL}/{tmdb_id}.json"
+    
+    payload = {
+        "id": int(tmdb_id),
+        "title": movie_title,
+        "url": magnet_link,  # Permanent magnet link
+        "type": "torrent"
+    }
+
+    db_response = requests.put(firebase_node_url, json=payload)
+    if db_response.status_code == 200:
+        print(f"✅ Successfully saved '{movie_title}' to Firebase Realtime Database!")
+    else:
+        print(f"❌ Failed to save to Firebase: {db_response.text}")
+
+if __name__ == "__main__":
+    target_url = input("Enter Vegamovies Post URL: ").strip()
+    manual_id = input("Enter TMDb ID manually (Press Enter to auto-detect): ").strip()
+    
+    scrape_vegamovies_torrent(target_url, int(manual_id) if manual_id else None)
