@@ -3,3 +3,4 @@ gunicorn
 requests
 cloudscraper
 beautifulsoup4
+firebase-admin
