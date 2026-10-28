@@ -10,24 +10,36 @@ CATEGORY_PATHS = [
     "/hindi-dubbed/",
     "/dual-audio-movies/"
 ]
-# Aapke Firebase Realtime Database ka public URL
 FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies"
 
-def get_headers():
-    return {
+def get_session():
+    """Creates a requests Session with browser-like headers and TLS settings to bypass basic blocks."""
+    session = requests.Session()
+    session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
-    }
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0"
+    })
+    return session
 
 def clean_movie_title(raw_title):
     title = re.sub(r'(Download|Full Movie|Vegamovies|Dual Audio|Hindi|English|WEB-DL|HDRip|BluRay|480p|720p|1080p).*', '', raw_title, flags=re.IGNORECASE)
     return title.strip(" -|[]()")
 
-def extract_magnet_from_page(post_url):
+def extract_magnet_from_page(session, post_url):
     try:
-        response = requests.get(post_url, headers=get_headers(), timeout=15)
+        response = session.get(post_url, timeout=15)
         if response.status_code != 200:
             return []
         
@@ -49,8 +61,9 @@ def extract_magnet_from_page(post_url):
         return []
 
 def scrape_bulk_movies():
+    session = get_session()
     scraped_count = 0
-    target_goal = 30  # Shuru mein test ke liye 30 movies rakhi hain
+    target_goal = 20  # Test ke liye 20 movies rakhi hain
 
     print(f"🚀 Starting bulk crawler targeting {target_goal} items...")
 
@@ -61,9 +74,11 @@ def scrape_bulk_movies():
             print(f"🔍 Crawling Catalog Index: {target_page_url}")
 
             try:
-                res = requests.get(target_page_url, headers=get_headers(), timeout=15)
+                res = session.get(target_page_url, timeout=15)
+                print(f"📡 Response Status Code: {res.status_code}")
+                
                 if res.status_code != 200:
-                    print(f"⏹️ Status code {res.status_code} received. Stopping category.")
+                    print(f"⏹️ Blocked or reached end (Status {res.status_code}). Stopping category.")
                     break
 
                 soup = BeautifulSoup(res.text, 'html.parser')
@@ -92,10 +107,10 @@ def scrape_bulk_movies():
 
                     print(f"\n[{scraped_count + 1}] Processing: {clean_title}")
                     
-                    magnets = extract_magnet_from_page(post_url)
+                    magnets = extract_magnet_from_page(session, post_url)
                     if not magnets:
                         print("⚠️ No magnet links found. Skipping.")
-                        time.sleep(0.5)
+                        time.sleep(1)
                         continue
 
                     print(f"🧲 Found {len(magnets)} permanent Magnet link(s).")
@@ -106,7 +121,6 @@ def scrape_bulk_movies():
                         "category": "Hindi Dubbed"
                     }
 
-                    # Firebase REST API PUT request (No Secret JSON required!)
                     safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', clean_title.lower())
                     firebase_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
                     
@@ -118,7 +132,7 @@ def scrape_bulk_movies():
 
                     scraped_count += 1
                     found_on_page += 1
-                    time.sleep(1)
+                    time.sleep(2)
 
                 if found_on_page == 0:
                     break
