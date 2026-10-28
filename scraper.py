@@ -7,122 +7,116 @@ import requests
 FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies"
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 
-def get_movie_details_from_tmdb(title):
+def get_imdb_id_from_tmdb(tmdb_id, media_type="movie"):
+    """Fetches IMDb ID for a TMDB movie/series."""
     try:
-        clean_search_title = re.sub(r'\s*\(\d{4}\)', '', title).strip()
-        search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={requests.utils.quote(clean_search_title)}"
-        
-        res = requests.get(search_url, timeout=10)
+        url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids?api_key={TMDB_API_KEY}"
+        res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            results = data.get('results', [])
-            if results:
-                movie = results[0]
-                poster_path = movie.get('poster_path')
-                poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else "https://via.placeholder.com/300x450?text=No+Poster"
-                original_language = movie.get('original_language', '')
-                return poster_url, original_language
-    except Exception as e:
-        print(f"⚠️ Error fetching TMDB details for {title}: {e}")
-    
-    return "https://via.placeholder.com/300x450?text=No+Poster", "en"
+            return data.get('imdb_id')
+    except:
+        pass
+    return None
 
-def scrape_bulk_movies_and_series():
-    print("🚀 Starting Mega Bulk Scraper (Hollywood, Bollywood & Punjabi)...")
+def scrape_tmdb_mass_database():
+    print("🚀 Starting Ultimate TMDB Mass Scraper (Bollywood, Punjabi, Hollywood & New Releases)...")
     
-    # Expanded Catalogs including Global, Bollywood, and Punjabi endpoints
-    catalogs = [
-        "https://v3-cinemeta.strem.io/catalog/movie/top/skip=0.json",
-        "https://v3-cinemeta.strem.io/catalog/movie/top/skip=100.json",
-        "https://v3-cinemeta.strem.io/catalog/movie/top/skip=200.json",
-        "https://v3-cinemeta.strem.io/catalog/series/top/skip=0.json",
-        # Cinemeta Indian / Bollywood Catalogs
-        "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Hindi/skip=0.json",
-        "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Hindi/skip=100.json",
-        # Punjabi Cinema endpoint
-        "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Punjabi/skip=0.json"
+    # TMDB Discover Endpoints for Massive Data Collection (Multiple Pages)
+    endpoints = [
+        # Bollywood / Hindi Movies (Pages 1 to 5)
+        ("Bollywood & Hindi", "https://api.themoviedb.org/3/discover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=hi&sort_by=popularity.desc&page="),
+        # Punjabi Movies
+        ("Punjabi Movies", "https://api.themoviedb.org/3/discover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=pa&sort_by=popularity.desc&page="),
+        # Hollywood / Global Popular (Pages 1 to 5)
+        ("Hollywood / Dual Audio", "https://api.themoviedb.org/3/movie/popular?api_key=" + TMDB_API_KEY + "&page=")
     ]
     
     total_synced = 0
 
-    for catalog_url in catalogs:
-        print(f"\n📡 Fetching catalog batch: {catalog_url}")
-        try:
-            res = requests.get(catalog_url, timeout=15)
-            if res.status_code != 200:
-                continue
-
-            data = res.json()
-            metas = data.get('metas', [])
-            if not metas:
-                continue
-
-            for item in metas:
-                title = item.get('name')
-                year = item.get('year')
-                genres = item.get('genres', [])
-                imdb_id = item.get('id')
-                
-                if not imdb_id or not title:
+    for category_name, base_url in endpoints:
+        for page in range(1, 4): # Har category ke 3 pages (approx 60+ movies per category)
+            target_url = f"{base_url}{page}"
+            print(f"\n📡 Fetching {category_name} - Page {page}...")
+            
+            try:
+                res = requests.get(target_url, timeout=15)
+                if res.status_code != 200:
                     continue
 
-                poster_url, orig_lang = get_movie_details_from_tmdb(title)
+                data = res.json()
+                results = data.get('results', [])
+                if not results:
+                    continue
 
-                lower_title = title.lower()
-                genre_str = " ".join(genres).lower()
-
-                if 'punjabi' in genre_str or 'punjabi' in lower_title or 'jatt' in lower_title:
-                    category = "Punjabi Movies"
-                    clean_title = f"{title} ({year})" if year else title
-                elif orig_lang in ['hi', 'ur'] or 'hindi' in genre_str or 'bollywood' in genre_str or 'hindi' in lower_title:
-                    category = "Bollywood & Hindi"
-                    clean_title = f"{title} (Hindi) ({year})" if year else f"{title} (Hindi)"
-                else:
-                    category = "Hollywood / Dual Audio"
-                    clean_title = f"{title} (Hindi Dubbed) ({year})" if year else f"{title} (Hindi Dubbed)"
-
-                torrentio_stream_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
-                try:
-                    stream_res = requests.get(torrentio_stream_url, timeout=10)
-                    magnet_link = None
+                for item in results:
+                    title = item.get('title') or item.get('name')
+                    release_date = item.get('release_date') or item.get('first_air_date', '')
+                    year = release_date.split('-')[0] if release_date else ''
+                    tmdb_id = item.get('id')
+                    poster_path = item.get('poster_path')
                     
-                    if stream_res.status_code == 200:
-                        stream_data = stream_res.json()
-                        streams = stream_data.get('streams', [])
-                        for stream in streams:
-                            bih = stream.get('infoHash')
-                            if bih:
-                                magnet_link = f"magnet:?xt=urn:btih:{bih}&dn={requests.utils.quote(clean_title)}"
-                                break
+                    if not tmdb_id or not title:
+                        continue
+
+                    poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else "https://via.placeholder.com/300x450?text=No+Poster"
                     
-                    if not magnet_link:
-                        magnet_link = f"magnet:?xt=urn:btih:4a656e6b6973546f7272656e7448617368313233&dn={requests.utils.quote(clean_title)}"
+                    # Fetch real IMDb ID required for Torrentio
+                    imdb_id = get_imdb_id_from_tmdb(tmdb_id)
+                    if not imdb_id:
+                        continue
 
-                    print(f"🧲 [{total_synced + 1}] Syncing: {clean_title} [{category}]")
+                    # Naming format with tags
+                    if category_name == "Bollywood & Hindi":
+                        clean_title = f"{title} (Hindi) ({year})" if year else f"{title} (Hindi)"
+                    elif category_name == "Punjabi Movies":
+                        clean_title = f"{title} ({year})" if year else title
+                    else:
+                        clean_title = f"{title} (Hindi Dubbed) ({year})" if year else f"{title} (Hindi Dubbed)"
 
-                    movie_data = {
-                        "title": clean_title,
-                        "magnet": magnet_link,
-                        "poster": poster_url,
-                        "category": category
-                    }
+                    # Query Torrentio API for Magnet Link
+                    torrentio_stream_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
+                    try:
+                        stream_res = requests.get(torrentio_stream_url, timeout=10)
+                        magnet_link = None
+                        
+                        if stream_res.status_code == 200:
+                            stream_data = stream_res.json()
+                            streams = stream_data.get('streams', [])
+                            for stream in streams:
+                                bih = stream.get('infoHash')
+                                if bih:
+                                    magnet_link = f"magnet:?xt=urn:btih:{bih}&dn={requests.utils.quote(clean_title)}"
+                                    break
+                        
+                        if not magnet_link:
+                            magnet_link = f"magnet:?xt=urn:btih:4a656e6b6973546f7272656e7448617368313233&dn={requests.utils.quote(clean_title)}"
 
-                    safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', clean_title.lower())
-                    firebase_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
+                        print(f"🧲 [{total_synced + 1}] Syncing: {clean_title} [{category_name}]")
 
-                    db_res = requests.put(firebase_url, json=movie_data)
-                    if db_res.status_code == 200:
-                        total_synced += 1
+                        movie_data = {
+                            "title": clean_title,
+                            "magnet": magnet_link,
+                            "poster": poster_url,
+                            "category": category_name
+                        }
 
-                except Exception as inner_err:
-                    print(f"⚠️ Error stream fetch for {clean_title}: {inner_err}")
+                        safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', clean_title.lower())
+                        firebase_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
 
-                time.sleep(0.3)
+                        db_res = requests.put(firebase_url, json=movie_data)
+                        if db_res.status_code == 200:
+                            total_synced += 1
 
-        except Exception as e:
-            print(f"❌ Error in catalog batch: {e}")
+                    except Exception as inner_err:
+                        print(f"⚠️ Error stream fetch for {clean_title}: {inner_err}")
 
-    print(f"\n🎉 Mega Scraping Completed! Total {total_synced} items synced to Firebase successfully.")
+                    time.sleep(0.3)
+
+            except Exception as e:
+                print(f"❌ Error in batch: {e}")
+
+    print(f"\n🎉 Ultimate Mass Scraping Completed! Total {total_synced} new & popular items synced to Firebase.")
 
 if __name__ == "__main__":
-    scrape_bulk_movies_and_series()
+    scrape_tmdb_mass_database()
