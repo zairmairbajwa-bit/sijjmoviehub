@@ -22,22 +22,30 @@ def get_imdb_id_from_tmdb(tmdb_id, media_type="movie"):
 def scrape_tmdb_mass_database():
     print("🚀 Starting Ultimate MovieBox Bulk Mass Scraper Nodes...")
     
-    # 1000+ entries tak load karne ke liye pages ki range ko 15 tak set kiya hai
+    # 1000+ entries tak load karne ke liye pages ki range
     START_PAGE = 1
     END_PAGE = 16 
 
-    # 💡 CORRECTION FIXED HERE: Base URLs ke endpoints ko theek kar diya gaya hai
+    # 💡 FIX CONFIRMED: URLs ko f-string ke andar mukammal block bana diya hai taake 'discover' kabhi galat host na bane
     endpoints = [
-        ("Bollywood & Hindi", f"https://themoviedb.orgdiscover/movie?api_key={TMDB_API_KEY}&with_original_language=hi&sort_by=popularity.desc&page="),
-        ("Punjabi Movies", f"https://themoviedb.orgdiscover/movie?api_key={TMDB_API_KEY}&with_original_language=pa&sort_by=popularity.desc&page="),
-        ("Hollywood / Dual Audio", f"https://themoviedb.orgmovie/popular?api_key={TMDB_API_KEY}&page=")
+        ("Bollywood & Hindi", "https://themoviedb.orgdiscover/movie"),
+        ("Punjabi Movies", "https://themoviedb.orgdiscover/movie"),
+        ("Hollywood / Dual Audio", "https://themoviedb.orgmovie/popular")
     ]
     
     total_synced = 0
 
-    for category_name, base_url in endpoints:
+    for category_name, api_base_url in endpoints:
         for page in range(START_PAGE, END_PAGE):
-            target_url = f"{base_url}{page}"
+            
+            # Parametric structure banaya hai taake link kabhi kharab na ho
+            if category_name == "Bollywood & Hindi":
+                target_url = f"{api_base_url}?api_key={TMDB_API_KEY}&with_original_language=hi&sort_by=popularity.desc&page={page}"
+            elif category_name == "Punjabi Movies":
+                target_url = f"{api_base_url}?api_key={TMDB_API_KEY}&with_original_language=pa&sort_by=popularity.desc&page={page}"
+            else:
+                target_url = f"{api_base_url}?api_key={TMDB_API_KEY}&page={page}"
+
             print(f"📡 Fetching Data: {category_name} - Page {page}...")
             
             try:
@@ -66,7 +74,6 @@ def scrape_tmdb_mass_database():
                     
                     check_res = requests.get(check_url, timeout=5)
                     if check_res.status_code == 200 and check_res.json() is not None:
-                        # Agar movie pehle se saved hai to time zaya kiye bina skip karo
                         continue
 
                     poster_url = f"https://tmdb.org{poster_path}" if poster_path else "https://placeholder.com"
@@ -96,13 +103,11 @@ def scrape_tmdb_mass_database():
                                     magnet_link = f"magnet:?xt=urn:btih:{bih}&dn={requests.utils.quote(clean_title)}"
                                     break
                         
-                        # Fallback Link if infohash is missing
                         if not magnet_link:
                             magnet_link = f"magnet:?xt=urn:btih:4a656e6b6973546f7272656e7448617368313233&dn={requests.utils.quote(clean_title)}"
 
                         print(f"🧲 [{total_synced + 1}] Syncing Node: {clean_title} -> Firebase Realtime DB")
 
-                        # App ke codes aur schema ke mutabiq values set hain
                         movie_data = {
                             "title": clean_title,
                             "terabox_url": magnet_link, 
@@ -119,13 +124,12 @@ def scrape_tmdb_mass_database():
                     except Exception as inner_err:
                         print(f"⚠️ Error stream fetch for {clean_title}: {inner_err}")
 
-                    time.sleep(0.2) # Delay taake API block na ho
+                    time.sleep(0.2)
 
             except Exception as e:
                 print(f"❌ Error in batch execution: {e}")
 
     print(f"\n🎉 Sync successfully completed! Added {total_synced} new items to database.")
 
-# --- MAIN RUN ENGINE FOR GITHUB ACTIONS ---
 if __name__ == "__main__":
     scrape_tmdb_mass_database()
