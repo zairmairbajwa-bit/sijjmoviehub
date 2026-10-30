@@ -1,10 +1,10 @@
-import os
+import re
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-import torrentstream
 
-app = FastAPI(title="SijjMoviesHub Streaming Bridge", version="1.0")
+app = FastAPI(title="SijjMoviesHub Proxy Streaming Bridge", version="2.0")
 
 # 1. CORS SETUP: Allow all origins and methods for mobile application communication
 app.add_middleware(
@@ -16,10 +16,10 @@ app.add_middleware(
 )
 
 @app.get("/api/get-movie")
-async def get_movie(url: str = Query(..., description="Raw magnet link from Firebase")):
+async def get_movie(url: str = Query(..., description="Raw magnet link from Firebase Realtime Database")):
     """
-    Endpoint that accepts a magnet link, initializes torrentstream,
-    finds the largest video file, and streams it back chunk-by-chunk.
+    Endpoint that accepts a magnet link, validates it, extracts infohash as fallback,
+    and proxies the video stream seamlessly via webtor.io without native C++ compilation.
     """
     # 2. Validate URL format
     if not url or not url.startswith("magnet:"):
@@ -28,47 +28,57 @@ async def get_movie(url: str = Query(..., description="Raw magnet link from Fire
             detail="Invalid or missing magnet link. URL must start with 'magnet:'"
         )
 
-    try:
-        # 3. Initialize and load torrent asynchronously
-        ts = torrentstream.Torrent(url)
-        await ts.load()
+    # 3. Extract infohash using regex (fallback logging/verification)
+    infohash_match = re.search(r"xt=urn:btih:([a-zA-Z0-9]+)", url, re.IGNORECASE)
+    infohash = infohash_match.group(1) if infohash_match else "unknown"
 
-        if not ts.files:
+    # Construct public online stream extractor cluster URL
+    proxy_target_url = f"https://webtor.io/{url}"
+
+    try:
+        # 4. Use httpx AsyncClient to open an asynchronous streaming network pipe
+        client = httpx.AsyncClient(timeout=None, follow_redirects=True)
+        
+        # We request the stream from the extractor cluster
+        req = client.build_request("GET", proxy_target_url)
+        r = await client.send(req, stream=True)
+
+        if r.status_code >= 400:
+            await client.aclose()
             raise HTTPException(
-                status_code=404,
-                detail="No media files found inside this torrent bundle."
+                status_code=r.status_code,
+                detail=f"Remote proxy cluster returned error status: {r.status_code}"
             )
 
-        # 4. Automatically select the largest file (main movie file)
-        video_file = max(ts.files, key=lambda f: f.length)
-        file_name = os.path.basename(video_file.name) or "movie.mp4"
-
-        # 5. Define streaming generator to serve data byte-by-byte
-        async def file_streamer():
+        # 5. Create async generator function to stream remote proxy video packets byte-by-byte
+        async def proxy_generator():
             try:
-                async for chunk in video_file.stream():
-                    yield chunk
+                async for chunk in r.aiter_bytes(chunk_size=65536):
+                    if chunk:
+                        yield chunk
             except Exception as stream_err:
-                print(f"Streaming chunk error: {stream_err}")
+                print(f"Proxy chunk streaming error: {stream_err}")
+            finally:
+                await r.aclose()
+                await client.aclose()
 
-        # 6. Return StreamingResponse with required media headers for mobile video seeking
+        # 6. Control headers for mobile expo-video player seeking support
         headers = {
             "Accept-Ranges": "bytes",
-            "Content-Disposition": f"inline; filename={file_name}",
+            "Content-Disposition": "inline; filename=moviebox_stream.mp4",
         }
 
         return StreamingResponse(
-            file_streamer(),
+            proxy_generator(),
             media_type="video/mp4",
             headers=headers
         )
 
     except Exception as e:
-        # 7. Graceful error handling for zero seeds, buffering timeouts, or invalid torrents
-        print(f"Torrent stream engine exception: {str(e)}")
+        print(f"Proxy bridge execution exception for infohash {infohash}: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to resolve or buffer torrent stream: {str(e)}"
+            detail=f"Failed to proxy stream from extractor network: {str(e)}"
         )
 
 if __name__ == "__main__":
