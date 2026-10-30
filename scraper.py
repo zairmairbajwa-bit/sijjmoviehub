@@ -4,13 +4,13 @@ import time
 import requests
 
 # --- CONFIGURATION ---
-FIREBASE_DB_URL = "https://firebaseio.com"
+# ✅ Sahi Firebase Database URL laga diya gaya hai
+FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com"
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 
 def get_imdb_id_from_tmdb(tmdb_id, media_type="movie"):
     """Fetches IMDb ID for a TMDB movie/series required for Torrentio."""
     try:
-        # ✅ FIX: Sahi API base URL aur version '/3/' add kar diya hai
         url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids?api_key={TMDB_API_KEY}"
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
@@ -23,11 +23,9 @@ def get_imdb_id_from_tmdb(tmdb_id, media_type="movie"):
 def scrape_tmdb_mass_database():
     print("🚀 Starting Ultimate MovieBox Bulk Mass Scraper Nodes...")
     
-    # 1000+ entries tak load karne ke liye pages ki range
     START_PAGE = 1
     END_PAGE = 16 
 
-    # ✅ FIX: Endpoints mein domain aur path ke beech proper slash '/' laga diya hai
     endpoints = [
         ("Bollywood & Hindi", "https://api.themoviedb.org/3/discover/movie"),
         ("Punjabi Movies", "https://api.themoviedb.org/3/discover/movie"),
@@ -39,7 +37,6 @@ def scrape_tmdb_mass_database():
     for category_name, api_base_url in endpoints:
         for page in range(START_PAGE, END_PAGE):
             
-            # Parametric structure banaya hai taake link kabhi kharab na ho
             if category_name == "Bollywood & Hindi":
                 target_url = f"{api_base_url}?api_key={TMDB_API_KEY}&with_original_language=hi&sort_by=popularity.desc&page={page}"
             elif category_name == "Punjabi Movies":
@@ -69,15 +66,16 @@ def scrape_tmdb_mass_database():
                     if not tmdb_id or not title:
                         continue
 
-                    # Firebase Realtime Database Data Duplicate check filter
                     safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', f"{title.lower()}_{year}")
                     check_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
                     
-                    check_res = requests.get(check_url, timeout=5)
-                    if check_res.status_code == 200 and check_res.json() is not None:
-                        continue
+                    try:
+                        check_res = requests.get(check_url, timeout=5)
+                        if check_res.status_code == 200 and check_res.json() is not None:
+                            continue
+                    except:
+                        pass
 
-                    # ✅ FIX: TMDB ka official image base URL laga diya hai taake poster properly load ho
                     poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else "https://placeholder.com"
                     
                     imdb_id = get_imdb_id_from_tmdb(tmdb_id)
