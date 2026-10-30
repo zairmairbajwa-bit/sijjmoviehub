@@ -10,7 +10,8 @@ TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 def get_imdb_id_from_tmdb(tmdb_id, media_type="movie"):
     """Fetches IMDb ID for a TMDB movie/series required for Torrentio."""
     try:
-        url = f"https://themoviedb.org{media_type}/{tmdb_id}/external_ids?api_key={TMDB_API_KEY}"
+        # ✅ FIX: Sahi API base URL aur version '/3/' add kar diya hai
+        url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids?api_key={TMDB_API_KEY}"
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
@@ -26,11 +27,11 @@ def scrape_tmdb_mass_database():
     START_PAGE = 1
     END_PAGE = 16 
 
-    # 💡 FIX CONFIRMED: URLs ko f-string ke andar mukammal block bana diya hai taake 'discover' kabhi galat host na bane
+    # ✅ FIX: Endpoints mein domain aur path ke beech proper slash '/' laga diya hai
     endpoints = [
-        ("Bollywood & Hindi", "https://themoviedb.orgdiscover/movie"),
-        ("Punjabi Movies", "https://themoviedb.orgdiscover/movie"),
-        ("Hollywood / Dual Audio", "https://themoviedb.orgmovie/popular")
+        ("Bollywood & Hindi", "https://api.themoviedb.org/3/discover/movie"),
+        ("Punjabi Movies", "https://api.themoviedb.org/3/discover/movie"),
+        ("Hollywood / Dual Audio", "https://api.themoviedb.org/3/movie/popular")
     ]
     
     total_synced = 0
@@ -76,7 +77,8 @@ def scrape_tmdb_mass_database():
                     if check_res.status_code == 200 and check_res.json() is not None:
                         continue
 
-                    poster_url = f"https://tmdb.org{poster_path}" if poster_path else "https://placeholder.com"
+                    # ✅ FIX: TMDB ka official image base URL laga diya hai taake poster properly load ho
+                    poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else "https://placeholder.com"
                     
                     imdb_id = get_imdb_id_from_tmdb(tmdb_id)
                     if not imdb_id:
@@ -89,7 +91,7 @@ def scrape_tmdb_mass_database():
                     else:
                         clean_title = f"{title} (Hindi Dubbed) ({year})" if year else f"{title} (Hindi Dubbed)"
 
-                    torrentio_stream_url = f"https://strem.fun{imdb_id}.json"
+                    torrentio_stream_url = f"https://strem.fun/{imdb_id}.json"
                     try:
                         stream_res = requests.get(torrentio_stream_url, timeout=10)
                         magnet_link = None
