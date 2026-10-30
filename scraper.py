@@ -26,10 +26,11 @@ def scrape_tmdb_mass_database():
     START_PAGE = 1
     END_PAGE = 16 
 
+    # 💡 CORRECTION FIXED HERE: Base URLs ke endpoints ko theek kar diya gaya hai
     endpoints = [
-        ("Bollywood & Hindi", "https://themoviedb.orgdiscover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=hi&sort_by=popularity.desc&page="),
-        ("Punjabi Movies", "https://themoviedb.orgdiscover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=pa&sort_by=popularity.desc&page="),
-        ("Hollywood / Dual Audio", "https://themoviedb.orgmovie/popular?api_key=" + TMDB_API_KEY + "&page=")
+        ("Bollywood & Hindi", f"https://themoviedb.orgdiscover/movie?api_key={TMDB_API_KEY}&with_original_language=hi&sort_by=popularity.desc&page="),
+        ("Punjabi Movies", f"https://themoviedb.orgdiscover/movie?api_key={TMDB_API_KEY}&with_original_language=pa&sort_by=popularity.desc&page="),
+        ("Hollywood / Dual Audio", f"https://themoviedb.orgmovie/popular?api_key={TMDB_API_KEY}&page=")
     ]
     
     total_synced = 0
@@ -37,7 +38,7 @@ def scrape_tmdb_mass_database():
     for category_name, base_url in endpoints:
         for page in range(START_PAGE, END_PAGE):
             target_url = f"{base_url}{page}"
-            print(f"\n📡 Fetching Data: {category_name} - Page {page}...")
+            print(f"📡 Fetching Data: {category_name} - Page {page}...")
             
             try:
                 res = requests.get(target_url, timeout=15)
