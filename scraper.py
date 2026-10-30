@@ -4,7 +4,7 @@ import time
 import requests
 
 # --- CONFIGURATION ---
-# ✅ Sahi Firebase Database URL laga diya gaya hai
+# ✅ Sahi Firebase Database URL set kar diya gaya hai
 FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com"
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 
@@ -89,7 +89,9 @@ def scrape_tmdb_mass_database():
                     else:
                         clean_title = f"{title} (Hindi Dubbed) ({year})" if year else f"{title} (Hindi Dubbed)"
 
-                    torrentio_stream_url = f"https://strem.fun/{imdb_id}.json"
+                    # ✅ FIX: Torrentio ka sahi official domain aur slash '/' add kar diya hai
+                    torrentio_stream_url = f"https://torrentio.strem.fun/{imdb_id}.json"
+                    
                     try:
                         stream_res = requests.get(torrentio_stream_url, timeout=10)
                         magnet_link = None
