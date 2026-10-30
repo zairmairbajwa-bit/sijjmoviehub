@@ -4,13 +4,13 @@ import time
 import requests
 
 # --- CONFIGURATION ---
-FIREBASE_DB_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com/movies"
+FIREBASE_DB_URL = "https://firebaseio.com"
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 
 def get_imdb_id_from_tmdb(tmdb_id, media_type="movie"):
-    """Fetches IMDb ID for a TMDB movie/series."""
+    """Fetches IMDb ID for a TMDB movie/series required for Torrentio."""
     try:
-        url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids?api_key={TMDB_API_KEY}"
+        url = f"https://themoviedb.org{media_type}/{tmdb_id}/external_ids?api_key={TMDB_API_KEY}"
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
@@ -20,24 +20,24 @@ def get_imdb_id_from_tmdb(tmdb_id, media_type="movie"):
     return None
 
 def scrape_tmdb_mass_database():
-    print("🚀 Starting Ultimate TMDB Mass Scraper (Bollywood, Punjabi, Hollywood & New Releases)...")
+    print("🚀 Starting Ultimate MovieBox Bulk Mass Scraper Nodes...")
     
-    # TMDB Discover Endpoints for Massive Data Collection (Multiple Pages)
+    # 1000+ entries tak load karne ke liye pages ki range ko 15 tak set kiya hai
+    START_PAGE = 1
+    END_PAGE = 16 
+
     endpoints = [
-        # Bollywood / Hindi Movies (Pages 1 to 5)
-        ("Bollywood & Hindi", "https://api.themoviedb.org/3/discover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=hi&sort_by=popularity.desc&page="),
-        # Punjabi Movies
-        ("Punjabi Movies", "https://api.themoviedb.org/3/discover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=pa&sort_by=popularity.desc&page="),
-        # Hollywood / Global Popular (Pages 1 to 5)
-        ("Hollywood / Dual Audio", "https://api.themoviedb.org/3/movie/popular?api_key=" + TMDB_API_KEY + "&page=")
+        ("Bollywood & Hindi", "https://themoviedb.orgdiscover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=hi&sort_by=popularity.desc&page="),
+        ("Punjabi Movies", "https://themoviedb.orgdiscover/movie?api_key=" + TMDB_API_KEY + "&with_original_language=pa&sort_by=popularity.desc&page="),
+        ("Hollywood / Dual Audio", "https://themoviedb.orgmovie/popular?api_key=" + TMDB_API_KEY + "&page=")
     ]
     
     total_synced = 0
 
     for category_name, base_url in endpoints:
-        for page in range(1, 4): # Har category ke 3 pages (approx 60+ movies per category)
+        for page in range(START_PAGE, END_PAGE):
             target_url = f"{base_url}{page}"
-            print(f"\n📡 Fetching {category_name} - Page {page}...")
+            print(f"\n📡 Fetching Data: {category_name} - Page {page}...")
             
             try:
                 res = requests.get(target_url, timeout=15)
@@ -59,14 +59,21 @@ def scrape_tmdb_mass_database():
                     if not tmdb_id or not title:
                         continue
 
-                    poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else "https://via.placeholder.com/300x450?text=No+Poster"
+                    # Firebase Realtime Database Data Duplicate check filter
+                    safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', f"{title.lower()}_{year}")
+                    check_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
                     
-                    # Fetch real IMDb ID required for Torrentio
+                    check_res = requests.get(check_url, timeout=5)
+                    if check_res.status_code == 200 and check_res.json() is not None:
+                        # Agar movie pehle se saved hai to time zaya kiye bina skip karo
+                        continue
+
+                    poster_url = f"https://tmdb.org{poster_path}" if poster_path else "https://placeholder.com"
+                    
                     imdb_id = get_imdb_id_from_tmdb(tmdb_id)
                     if not imdb_id:
                         continue
 
-                    # Naming format with tags
                     if category_name == "Bollywood & Hindi":
                         clean_title = f"{title} (Hindi) ({year})" if year else f"{title} (Hindi)"
                     elif category_name == "Punjabi Movies":
@@ -74,8 +81,7 @@ def scrape_tmdb_mass_database():
                     else:
                         clean_title = f"{title} (Hindi Dubbed) ({year})" if year else f"{title} (Hindi Dubbed)"
 
-                    # Query Torrentio API for Magnet Link
-                    torrentio_stream_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
+                    torrentio_stream_url = f"https://strem.fun{imdb_id}.json"
                     try:
                         stream_res = requests.get(torrentio_stream_url, timeout=10)
                         magnet_link = None
@@ -89,21 +95,22 @@ def scrape_tmdb_mass_database():
                                     magnet_link = f"magnet:?xt=urn:btih:{bih}&dn={requests.utils.quote(clean_title)}"
                                     break
                         
+                        # Fallback Link if infohash is missing
                         if not magnet_link:
                             magnet_link = f"magnet:?xt=urn:btih:4a656e6b6973546f7272656e7448617368313233&dn={requests.utils.quote(clean_title)}"
 
-                        print(f"🧲 [{total_synced + 1}] Syncing: {clean_title} [{category_name}]")
+                        print(f"🧲 [{total_synced + 1}] Syncing Node: {clean_title} -> Firebase Realtime DB")
 
+                        # App ke codes aur schema ke mutabiq values set hain
                         movie_data = {
                             "title": clean_title,
-                            "magnet": magnet_link,
+                            "terabox_url": magnet_link, 
                             "poster": poster_url,
-                            "category": category_name
+                            "category": "Trending" if page <= 3 else "New",
+                            "tmdb_id": str(tmdb_id)
                         }
 
-                        safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', clean_title.lower())
                         firebase_url = f"{FIREBASE_DB_URL}/{safe_key}.json"
-
                         db_res = requests.put(firebase_url, json=movie_data)
                         if db_res.status_code == 200:
                             total_synced += 1
@@ -111,12 +118,13 @@ def scrape_tmdb_mass_database():
                     except Exception as inner_err:
                         print(f"⚠️ Error stream fetch for {clean_title}: {inner_err}")
 
-                    time.sleep(0.3)
+                    time.sleep(0.2) # Delay taake API block na ho
 
             except Exception as e:
-                print(f"❌ Error in batch: {e}")
+                print(f"❌ Error in batch execution: {e}")
 
-    print(f"\n🎉 Ultimate Mass Scraping Completed! Total {total_synced} new & popular items synced to Firebase.")
+    print(f"\n🎉 Sync successfully completed! Added {total_synced} new items to database.")
 
+# --- MAIN RUN ENGINE FOR GITHUB ACTIONS ---
 if __name__ == "__main__":
     scrape_tmdb_mass_database()
