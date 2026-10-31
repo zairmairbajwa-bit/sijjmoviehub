@@ -1,12 +1,12 @@
+import os
 import re
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 
-app = FastAPI(title="SijjMoviesHub Proxy Streaming Bridge", version="2.0")
+app = FastAPI(title="SijjMoviesHub Zero-Database-Link Engine", version="4.0")
 
-# 1. CORS SETUP: Allow all origins and methods for mobile application communication
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,71 +15,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/get-movie")
-async def get_movie(url: str = Query(..., description="Raw magnet link from Firebase Realtime Database")):
+@app.get("/api/get-fresh-stream")
+async def get_fresh_stream(tmdb_id: str = Query(..., description="TMDB Movie ID")):
     """
-    Endpoint that accepts a magnet link, validates it, extracts infohash as fallback,
-    and proxies the video stream seamlessly via webtor.io without native C++ compilation.
+    Sequentially queries AutoEmbed, VidLink, and Cinesrc proxies on-the-fly 
+    to extract unexpired fresh media stream URLs (.mp4 or .m3u8).
     """
-    # 2. Validate URL format
-    if not url or not url.startswith("magnet:"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or missing magnet link. URL must start with 'magnet:'"
-        )
+    sources = [
+        f"https://autoembed.cc/embed/movie/{tmdb_id}",
+        f"https://vidlink.pro/movie/{tmdb_id}",
+        f"https://cinesrc.xyz/embed?id={tmdb_id}"
+    ]
 
-    # 3. Extract infohash using regex (fallback logging/verification)
-    infohash_match = re.search(r"xt=urn:btih:([a-zA-Z0-9]+)", url, re.IGNORECASE)
-    infohash = infohash_match.group(1) if infohash_match else "unknown"
-
-    # Construct public online stream extractor cluster URL
-    proxy_target_url = f"https://webtor.io/{url}"
-
-    try:
-        # 4. Use httpx AsyncClient to open an asynchronous streaming network pipe
-        client = httpx.AsyncClient(timeout=None, follow_redirects=True)
-        
-        # We request the stream from the extractor cluster
-        req = client.build_request("GET", proxy_target_url)
-        r = await client.send(req, stream=True)
-
-        if r.status_code >= 400:
-            await client.aclose()
-            raise HTTPException(
-                status_code=r.status_code,
-                detail=f"Remote proxy cluster returned error status: {r.status_code}"
-            )
-
-        # 5. Create async generator function to stream remote proxy video packets byte-by-byte
-        async def proxy_generator():
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        for source_url in sources:
             try:
-                async for chunk in r.aiter_bytes(chunk_size=65536):
-                    if chunk:
-                        yield chunk
-            except Exception as stream_err:
-                print(f"Proxy chunk streaming error: {stream_err}")
-            finally:
-                await r.aclose()
-                await client.aclose()
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://autoembed.cc/"
+                }
+                res = await client.get(source_url, headers=headers)
+                if res.status_code == 200:
+                    html_content = res.text
+                    # Trace underlying media stream container (.mp4 or adaptive .m3u8)
+                    match = re.search(r'https?://[^\s<>"]+?\.(?:m3u8|mp4)', html_content)
+                    if match:
+                        return {
+                            "success": True,
+                            "source_provider": source_url,
+                            "stream_url": match.group(0)
+                        }
+                    # Fallback to direct embed source if regex scan misses raw container
+                    return {
+                        "success": True,
+                        "source_provider": source_url,
+                        "stream_url": source_url
+                    }
+            except Exception:
+                continue
 
-        # 6. Control headers for mobile expo-video player seeking support
-        headers = {
-            "Accept-Ranges": "bytes",
-            "Content-Disposition": "inline; filename=moviebox_stream.mp4",
-        }
-
-        return StreamingResponse(
-            proxy_generator(),
-            media_type="video/mp4",
-            headers=headers
-        )
-
-    except Exception as e:
-        print(f"Proxy bridge execution exception for infohash {infohash}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to proxy stream from extractor network: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=404,
+        detail="All multi-source streaming index nodes failed to resolve media container."
+    )
 
 if __name__ == "__main__":
     import uvicorn
