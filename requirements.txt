@@ -2,3 +2,5 @@ httpx
 requests
 firebase-admin
 telethon
+fastapi
+uvicorn
