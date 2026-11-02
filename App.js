@@ -1,476 +1,746 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
   View,
-  TextInput,
-  TouchableOpacity,
   FlatList,
-  Image,
+  TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
-  ScrollView,
   Dimensions,
+  SafeAreaView,
+  StatusBar,
+  TextInput,
+  ScrollView,
+  Image,
+  Platform,
+  Alert,
+  BackHandler
 } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { useVideoPlayer, VideoView } from 'expo-video';
+
+let FileSystem;
+try {
+  FileSystem = require('expo-file-system/legacy');
+} catch (e) {
+  FileSystem = require('expo-file-system');
+}
 
 const { width } = Dimensions.get('window');
-const TMDB_API_KEY = '7b6a89d3dc55b3a81aa892a88c0da6b9';
+const FIREBASE_BASE_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com";
+const RENDER_CLOUD_BACKEND = "https://sijjmoviehub.onrender.com/api/leech-and-stream?tmdb_id=";
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState('home'); // 'home', 'search', 'details'
-  const [trendingMovies, setTrendingMovies] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [loading, setLoading] = useState(false);
+function NativeVideoPlayer({ streamUrl, onClosePlayer }) {
+  const [buffering, setBuffering] = useState(true);
 
-  // Bot Server se aane wali custom Hindi dubbed movies ki list
-  const [botMovies, setBotMovies] = useState([]);
-
-  // Season & Episode States for TV Series
-  const [season, setSeason] = useState('1');
-  const [episode, setEpisode] = useState('1');
+  const player = useVideoPlayer(streamUrl, (p) => {
+    try {
+      p.loop = false;
+      p.play();
+    } catch (e) {}
+  });
 
   useEffect(() => {
-    fetchTrending();
-    fetchBotServerMovies();
+    setBuffering(true);
+    let sub;
+    try {
+      sub = player.addListener('statusChange', (ev) => {
+        const currentStatus = ev?.status || player.status;
+        if (currentStatus === 'readyToPlay') {
+          setBuffering(false);
+          try {
+            player.play();
+          } catch (e) {}
+        } else if (currentStatus === 'loading') {
+          setBuffering(true);
+        }
+      });
+    } catch (e) {}
+
+    const timer = setTimeout(() => {
+      setBuffering(false);
+    }, 4500);
+
+    return () => {
+      clearTimeout(timer);
+      if (sub && sub.remove) sub.remove();
+    };
+  }, [streamUrl, player]);
+
+  return (
+    <View style={styles.playerBox}>
+      <VideoView
+        style={styles.videoElement}
+        player={player}
+        allowsFullscreen
+        allowsPictureInPicture
+        nativeControls={true}
+        contentFit="contain"
+      />
+
+      {buffering && (
+        <View style={styles.spinnerOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color="#E50914" />
+          <Text style={styles.spinnerText}>Loading Telethon Stream...</Text>
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={styles.topLeftBackButton}
+        onPress={onClosePlayer}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.topLeftBackIcon}>⬅ Back</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, errorText: '' };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, errorText: error ? error.toString() : 'Unknown Error' };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <SafeAreaView style={styles.errorScreen}>
+          <Text style={styles.errorTitle}>Application Exception Guard</Text>
+          <Text style={styles.errorDesc}>{this.state.errorText}</Text>
+          <TouchableOpacity
+            style={styles.errorResetBtn}
+            onPress={() => this.setState({ hasError: false })}
+          >
+            <Text style={styles.errorResetText}>Restart Application</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function MainApp() {
+  const [movies, setMovies] = useState([]);
+  const [filteredMovies, setFilteredMovies] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [selectedMovie, setSelectedMovie] = useState(null);
+  const [resolvedStreamUrl, setResolvedStreamUrl] = useState(null);
+  const [resolvingStream, setResolvingStream] = useState(false);
+  const [activeTab, setActiveTab] = useState('Movies');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [downloads, setDownloads] = useState([]);
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
+  useEffect(() => {
+    fetchMetadataFromDatabase();
+    syncExistingSandboxFiles();
   }, []);
 
-  // 1. Fetch Global Trending Hollywood & Series from TMDB
-  const fetchTrending = async () => {
-    setLoading(true);
+  const handleClosePlayer = useCallback(() => {
+    if (selectedMovie) {
+      setSelectedMovie(null);
+      setResolvedStreamUrl(null);
+      return true;
+    }
+    if (activeTab !== 'Movies') {
+      setActiveTab('Movies');
+      return true;
+    }
+    return false;
+  }, [selectedMovie, activeTab]);
+
+  useEffect(() => {
+    const backSubscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      handleClosePlayer
+    );
+    return () => backSubscription.remove();
+  }, [handleClosePlayer]);
+
+  const fetchMetadataFromDatabase = async () => {
     try {
-      const response = await fetch(
-        `https://api.themoviedb.org/3/trending/all/day?api_key=${TMDB_API_KEY}&language=en-US`
+      const resMovies = await fetch(`${FIREBASE_BASE_URL}/movies.json`);
+      const dataMovies = await resMovies.json();
+      let rawData = dataMovies;
+
+      if (!rawData || typeof rawData !== 'object') {
+        const resRoot = await fetch(`${FIREBASE_BASE_URL}/.json`);
+        const dataRoot = await resRoot.json();
+        rawData = dataRoot.movies || dataRoot;
+      }
+
+      if (rawData && typeof rawData === 'object') {
+        const parsedList = [];
+        const extractItems = (obj) => {
+          Object.keys(obj).forEach((key) => {
+            const item = obj[key];
+            if (!item || typeof item !== 'object') return;
+            if (item.title || item.tmdb_id || item.poster) {
+              parsedList.push({
+                id: String(item.tmdb_id || key),
+                tmdb_id: String(item.tmdb_id || key),
+                title: String(item.title || 'Untitled Movie'),
+                overview: String(item.overview || ''),
+                poster: String(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster'),
+                category: item.hindi_dubbed ? 'Trending Hollywood (Hindi Dubbed)' : 'Popular Updates'
+              });
+            } else {
+              extractItems(item);
+            }
+          });
+        };
+        extractItems(rawData);
+        setMovies(parsedList);
+        setFilteredMovies(parsedList);
+      }
+    } catch (error) {
+      console.log("Database fetch error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const syncExistingSandboxFiles = async () => {
+    if (Platform.OS === 'web' || !FileSystem || !FileSystem.documentDirectory) return;
+    try {
+      const files = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory);
+      const hiddenFiles = files.filter((f) => f.startsWith('hidden_movie_') && f.endsWith('.mp4'));
+      const restored = await Promise.all(
+        hiddenFiles.map(async (filename) => {
+          const fileUri = FileSystem.documentDirectory + filename;
+          const info = await FileSystem.getInfoAsync(fileUri);
+          if (!info.exists || info.size < 10000) return null;
+          const movieId = filename.replace('hidden_movie_', '').replace('.mp4', '');
+          return {
+            id: movieId,
+            title: `Offline Movie (${movieId})`,
+            poster: 'https://via.placeholder.com/300x450/1f1f1f/E50914?text=Offline',
+            uri: fileUri,
+            sizeLabel: `${(info.size / (1024 * 1024)).toFixed(1)} MB`
+          };
+        })
       );
-      const data = await response.json();
-      setTrendingMovies(data.results || []);
-    } catch (error) {
-      console.log('Error fetching trending:', error);
-    }
-    setLoading(false);
+      setDownloads(restored.filter(Boolean));
+    } catch (e) {}
   };
 
-  // 2. Fetch Movies from Your Local Flask Bot Server
-  const fetchBotServerMovies = async () => {
-    try {
-      const response = await fetch('http://192.168.10.6:5000/movies');
-      const data = await response.json();
-      setBotMovies(data || []);
-    } catch (error) {
-      console.log('Error connecting to bot server:', error);
-    }
-  };
-
-  // Real-time Search
-  const handleSearch = async (text) => {
+  const handleSearch = (text) => {
     setSearchQuery(text);
-    if (!text.trim()) {
-      setSearchResults([]);
+    if (!text || text.trim() === '') {
+      setFilteredMovies(movies);
       return;
     }
-    setLoading(true);
+    const q = text.toLowerCase();
+    const localMatches = movies.filter(
+      (m) =>
+        (m.title && m.title.toLowerCase().includes(q)) ||
+        (m.tmdb_id && String(m.tmdb_id).includes(q))
+    );
+    setFilteredMovies(localMatches);
+  };
+
+  const handleSelectMovie = async (movie) => {
+    if (!movie) return;
+    setSelectedMovie(movie);
+    setResolvingStream(true);
+
+    const movieId = movie.tmdb_id || movie.id;
+    const sandboxFileUri = FileSystem.documentDirectory + 'hidden_movie_' + movieId + '.mp4';
+
+    if (Platform.OS !== 'web' && FileSystem) {
+      try {
+        const info = await FileSystem.getInfoAsync(sandboxFileUri);
+        if (info.exists && info.size > 10000) {
+          setResolvedStreamUrl(sandboxFileUri);
+          setResolvingStream(false);
+          return;
+        }
+      } catch (e) {}
+    }
+
     try {
-      const response = await fetch(
-        `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(
-          text
-        )}&language=en-US`
-      );
-      const data = await response.json();
-      const filteredResults = (data.results || []).filter(
-        (item) => item.media_type === 'movie' || item.media_type === 'tv'
-      );
-      setSearchResults(filteredResults);
-    } catch (error) {
-      console.log('Error searching:', error);
+      const res = await fetch(`${RENDER_CLOUD_BACKEND}${movieId}`);
+      const data = await res.json();
+      if (data && data.success && data.stream_url) {
+        setResolvedStreamUrl(data.stream_url);
+      } else {
+        setResolvedStreamUrl(`https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4`);
+      }
+    } catch (err) {
+      setResolvedStreamUrl(`https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4`);
+    } finally {
+      setResolvingStream(false);
     }
-    setLoading(false);
   };
 
-  // Check if bot server has a custom link for this movie, otherwise use default VidLink with Hindi forced
-  const getStreamUrl = () => {
-    if (!selectedItem) return '';
-
-    const title = (selectedItem.title || selectedItem.name || '').toLowerCase();
-    
-    // Check if bot database has this movie title
-    const matchedBotMovie = botMovies.find(
-      (m) => m.title.toLowerCase().includes(title) || title.includes(m.title.toLowerCase())
-    );
-
-    if (matchedBotMovie && matchedBotMovie.stream_url) {
-      console.log("Playing from Bot Server:", matchedBotMovie.title);
-      return matchedBotMovie.stream_url;
+  const handleDownloadMovie = async () => {
+    if (!selectedMovie) return;
+    if (Platform.OS === 'web' || !FileSystem || !FileSystem.documentDirectory) {
+      Alert.alert("Notice", "Offline downloads only supported on Android devices.");
+      return;
     }
 
-    // Fallback to VidLink with forced Hindi audio/subs
-    const isTv = selectedItem.media_type === 'tv' || selectedItem.first_air_date;
-    const id = selectedItem.id;
-    const s = season || '1';
-    const e = episode || '1';
+    const movieId = selectedMovie.tmdb_id || selectedMovie.id;
+    const fileUri = FileSystem.documentDirectory + 'hidden_movie_' + movieId + '.mp4';
 
-    return isTv
-      ? `https://vidlink.pro/tv/${id}/${s}/${e}?audio=hi&sub=hi`
-      : `https://vidlink.pro/movie/${id}?audio=hi&sub=hi`;
+    setDownloadingId(movieId);
+    setDownloadProgress(0.01);
+
+    try {
+      const targetUrl = resolvedStreamUrl;
+      const downloadResumable = FileSystem.createDownloadResumable(
+        targetUrl,
+        fileUri,
+        {},
+        (progressData) => {
+          if (progressData && progressData.totalBytesExpectedToWrite > 0) {
+            const ratio = progressData.totalBytesWritten / progressData.totalBytesExpectedToWrite;
+            setDownloadProgress(Math.min(1, Math.max(0.01, ratio)));
+          }
+        }
+      );
+
+      const result = await downloadResumable.downloadAsync();
+      setDownloadingId(null);
+
+      if (result && result.uri) {
+        setDownloads((prev) => [
+          {
+            id: movieId,
+            title: selectedMovie.title,
+            poster: selectedMovie.poster,
+            uri: result.uri,
+            sizeLabel: 'Cached'
+          },
+          ...prev.filter((d) => d.id !== movieId)
+        ]);
+        Alert.alert("Download Complete ✅", "Movie safely stored in private sandbox cache!");
+        setResolvedStreamUrl(result.uri);
+      }
+    } catch (err) {
+      setDownloadingId(null);
+      Alert.alert("Download Error", "Failed to download stream.");
+    }
   };
 
-  const renderCard = ({ item }) => {
-    const title = item.title || item.name;
-    const poster = item.poster_path
-      ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
-      : 'https://via.placeholder.com/500x750?text=No+Poster';
-    const isTv = item.media_type === 'tv' || item.first_air_date;
+  const handleDeleteDownload = async (item) => {
+    try {
+      if (item.uri && FileSystem) {
+        await FileSystem.deleteAsync(item.uri, { idempotent: true });
+      }
+    } catch (e) {}
+    setDownloads((prev) => prev.filter((d) => d.id !== item.id));
+  };
 
+  if (loading) {
     return (
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => {
-          setSelectedItem(item);
-          setSeason('1');
-          setEpisode('1');
-          setActiveTab('details');
-        }}
-      >
-        <Image source={{ uri: poster }} style={styles.poster} />
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>{isTv ? 'HD SERIES' : 'HINDI DUB'}</Text>
-        </View>
-        <Text style={styles.cardTitle} numberOfLines={1}>
-          {title}
-        </Text>
-        <Text style={styles.cardSub}>
-          ⭐ {item.vote_average ? item.vote_average.toFixed(1) : '8.0'} | {isTv ? 'Series' : 'Movie'}
-        </Text>
-      </TouchableOpacity>
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color="#E50914" />
+        <Text style={styles.loadingText}>Loading SijjMoviesHub Catalog...</Text>
+      </View>
     );
-  };
+  }
 
-  const isSelectedTv =
-    selectedItem && (selectedItem.media_type === 'tv' || selectedItem.first_air_date);
+  const hindiDubbedList = filteredMovies.filter(m => m.category.includes('Hindi'));
+  const popularList = filteredMovies.filter(m => !m.category.includes('Hindi'));
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.logo}>
-          Sijj<Text style={{ color: '#e50914' }}>MovieHub</Text>
-        </Text>
-        <View style={styles.navButtons}>
-          <TouchableOpacity
-            style={[styles.navBtn, activeTab === 'home' && styles.activeNavBtn]}
-            onPress={() => {
-              setActiveTab('home');
-              setSelectedItem(null);
-            }}
-          >
-            <Text style={styles.navText}>Home</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.navBtn, activeTab === 'search' && styles.activeNavBtn]}
-            onPress={() => setActiveTab('search')}
-          >
-            <Text style={styles.navText}>Search</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <StatusBar barStyle="light-content" backgroundColor="#0f0f0f" />
 
-      {loading && (
-        <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#e50914" />
-        </View>
-      )}
-
-      {/* HOME TAB */}
-      {activeTab === 'home' && !loading && (
-        <View style={styles.content}>
-          <Text style={styles.sectionTitle}>🔥 Trending Hollywood & Series</Text>
-          <FlatList
-            data={trendingMovies}
-            renderItem={renderCard}
-            keyExtractor={(item) => item.id.toString()}
-            numColumns={2}
-            columnWrapperStyle={styles.columnWrapper}
-            showsVerticalScrollIndicator={false}
-          />
-        </View>
-      )}
-
-      {/* SEARCH TAB */}
-      {activeTab === 'search' && (
-        <View style={styles.content}>
-          <View style={styles.searchBoxContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Search any Hollywood movie or series..."
-              placeholderTextColor="#888"
-              value={searchQuery}
-              onChangeText={handleSearch}
+      {selectedMovie ? (
+        <View style={styles.playerScreenContainer}>
+          {resolvingStream || !resolvedStreamUrl ? (
+            <View style={styles.playerBox}>
+              <ActivityIndicator size="large" color="#E50914" />
+              <Text style={styles.spinnerText}>Leeching from Telegram Channel...</Text>
+              <TouchableOpacity
+                style={styles.topLeftBackButton}
+                onPress={() => {
+                  setSelectedMovie(null);
+                  setResolvedStreamUrl(null);
+                }}
+              >
+                <Text style={styles.topLeftBackIcon}>⬅ Back</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <NativeVideoPlayer
+              key={resolvedStreamUrl}
+              streamUrl={resolvedStreamUrl}
+              onClosePlayer={() => {
+                setSelectedMovie(null);
+                setResolvedStreamUrl(null);
+              }}
             />
+          )}
+
+          <ScrollView style={styles.detailsScrollBox} contentContainerStyle={styles.detailsScrollContent}>
+            <Text style={styles.detailMovieTitle}>{selectedMovie.title}</Text>
+
+            <View style={styles.badgeRow}>
+              <View style={styles.categoryBadge}>
+                <Text style={styles.categoryBadgeText}>{selectedMovie.category}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.overviewText} numberOfLines={4}>
+              {selectedMovie.overview || "No overview available for this title."}
+            </Text>
+
+            {downloadingId === (selectedMovie.tmdb_id || selectedMovie.id) ? (
+              <View style={styles.downloadingIndicatorBox}>
+                <ActivityIndicator size="small" color="#E50914" />
+                <Text style={styles.downloadingText}>
+                  Downloading... {Math.round(downloadProgress * 100)}%
+                </Text>
+                <View style={styles.progressBarTrack}>
+                  <View style={[styles.progressBarFill, { width: `${Math.round(downloadProgress * 100)}%` }]} />
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={styles.primaryDownloadBtn}
+                onPress={handleDownloadMovie}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.primaryDownloadBtnText}>📥 Download & Keep in App</Text>
+              </TouchableOpacity>
+            )}
+          </ScrollView>
+        </View>
+      ) : (
+        <View style={{ flex: 1 }}>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>
+              Sijj<Text style={{ color: '#E50914' }}>MoviesHub</Text>
+            </Text>
           </View>
 
-          <FlatList
-            data={searchResults}
-            renderItem={renderCard}
-            keyExtractor={(item) => item.id.toString()}
-            numColumns={2}
-            columnWrapperStyle={styles.columnWrapper}
-            showsVerticalScrollIndicator={false}
-          />
-        </View>
-      )}
-
-      {/* DETAILS & PLAYER TAB */}
-      {activeTab === 'details' && selectedItem && (
-        <ScrollView style={styles.detailsContainer} showsVerticalScrollIndicator={false}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => setActiveTab('home')}
-          >
-            <Text style={styles.backButtonText}>❌ Back to Home</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.detailTitle}>{selectedItem.title || selectedItem.name}</Text>
-
-          {isSelectedTv && (
-            <View style={styles.epRow}>
-              <View style={styles.epInputBox}>
-                <Text style={styles.epLabel}>Season:</Text>
+          {activeTab === 'Movies' ? (
+            <ScrollView contentContainerStyle={{ paddingBottom: 90 }}>
+              <View style={styles.searchContainer}>
                 <TextInput
-                  style={styles.epInput}
-                  keyboardType="numeric"
-                  value={season}
-                  onChangeText={setSeason}
+                  style={styles.searchInput}
+                  placeholder="Search movies..."
+                  placeholderTextColor="#888"
+                  value={searchQuery}
+                  onChangeText={handleSearch}
                 />
               </View>
-              <View style={styles.epInputBox}>
-                <Text style={styles.epLabel}>Episode:</Text>
-                <TextInput
-                  style={styles.epInput}
-                  keyboardType="numeric"
-                  value={episode}
-                  onChangeText={setEpisode}
+
+              <Text style={styles.sectionTitle}>🇮🇳 Trending Hollywood (Hindi Dubbed)</Text>
+              <FlatList
+                data={hindiDubbedList.length > 0 ? hindiDubbedList : filteredMovies}
+                keyExtractor={(item, idx) => 'hindi_' + (item.id || idx)}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 10 }}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.horizontalMovieCard}
+                    onPress={() => handleSelectMovie(item)}
+                  >
+                    <Image source={{ uri: item.poster }} style={styles.horizontalPoster} />
+                    <Text style={styles.horizontalCardTitle} numberOfLines={1}>{item.title}</Text>
+                  </TouchableOpacity>
+                )}
+              />
+
+              <Text style={styles.sectionTitle}>🔥 Popular Updates</Text>
+              <FlatList
+                data={popularList.length > 0 ? popularList : filteredMovies}
+                keyExtractor={(item, idx) => 'pop_' + (item.id || idx)}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 10 }}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.horizontalMovieCard}
+                    onPress={() => handleSelectMovie(item)}
+                  >
+                    <Image source={{ uri: item.poster }} style={styles.horizontalPoster} />
+                    <Text style={styles.horizontalCardTitle} numberOfLines={1}>{item.title}</Text>
+                  </TouchableOpacity>
+                )}
+              />
+            </ScrollView>
+          ) : (
+            <View style={styles.downloadsSectionContainer}>
+              <Text style={styles.sectionTitle}>📥 Offline Sandbox Cache</Text>
+              {downloads.length === 0 ? (
+                <View style={styles.emptyDownloadsBox}>
+                  <Text style={styles.emptyDownloadsIcon}>📂</Text>
+                  <Text style={styles.emptyDownloadsTitle}>No Cached Movies Yet</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={downloads}
+                  keyExtractor={(item) => item.id}
+                  contentContainerStyle={{ padding: 12, paddingBottom: 90 }}
+                  renderItem={({ item }) => (
+                    <View style={styles.downloadItemCard}>
+                      <Image source={{ uri: item.poster }} style={styles.downloadThumb} />
+                      <View style={styles.downloadInfoCol}>
+                        <Text style={styles.downloadItemTitle} numberOfLines={1}>
+                          {item.title}
+                        </Text>
+                        <View style={styles.downloadActionsRow}>
+                          <TouchableOpacity
+                            style={styles.playOfflineBtn}
+                            onPress={() => {
+                              setSelectedMovie({
+                                id: item.id,
+                                title: item.title,
+                                category: 'Offline Sandbox',
+                                poster: item.poster
+                              });
+                              setResolvedStreamUrl(item.uri);
+                            }}
+                          >
+                            <Text style={styles.playOfflineBtnText}>▶ Watch Offline</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={styles.deleteDownloadBtn}
+                            onPress={() => handleDeleteDownload(item)}
+                          >
+                            <Text style={styles.deleteDownloadBtnText}>🗑 Remove</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  )}
                 />
-              </View>
+              )}
             </View>
           )}
 
-          <Text style={styles.audioHint}>
-            💡 Note: Bot server se custom Hindi link check kiya ja raha hai, warna VidLink forced Hindi audio use hoga.
-          </Text>
+          <View style={styles.bottomTabBar}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'Movies' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('Movies')}
+            >
+              <Text style={[styles.tabButtonText, activeTab === 'Movies' && styles.tabButtonTextActive]}>
+                🎬 Movies List
+              </Text>
+            </TouchableOpacity>
 
-          <View style={styles.playerWrapper}>
-            <WebView
-              key={`${season}-${episode}`}
-              source={{ uri: getStreamUrl() }}
-              style={styles.webview}
-              allowsFullscreenVideo={true}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-              setSupportMultipleWindows={false}
-              onShouldStartLoadWithRequest={(request) => {
-                const url = request.url;
-                if (
-                  url.includes('vidlink') ||
-                  url.includes('vidsrc') ||
-                  url.includes('cloudflare') ||
-                  url.includes('google')
-                ) {
-                  return true;
-                }
-                return false;
-              }}
-              originWhitelist={['*']}
-              mixedContentMode="always"
-              userAgent="Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
-            />
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'Downloads' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('Downloads')}
+            >
+              <Text style={[styles.tabButtonText, activeTab === 'Downloads' && styles.tabButtonTextActive]}>
+                📥 Offline Cache {downloads.length > 0 ? `(${downloads.length})` : ''}
+              </Text>
+            </TouchableOpacity>
           </View>
-
-          <Text style={styles.detailOverview}>
-            {selectedItem.overview || 'No description available.'}
-          </Text>
-        </ScrollView>
+        </View>
       )}
     </SafeAreaView>
   );
 }
 
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <MainApp />
+    </ErrorBoundary>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-  },
+  container: { flex: 1, backgroundColor: '#0f0f0f' },
+  loadingScreen: { flex: 1, backgroundColor: '#0f0f0f', justifyContent: 'center', alignItems: 'center' },
+  loadingText: { color: '#fff', marginTop: 12, fontSize: 16, fontWeight: '600' },
+  errorScreen: { flex: 1, backgroundColor: '#0f0f0f', justifyContent: 'center', padding: 24 },
+  errorTitle: { color: '#E50914', fontSize: 22, fontWeight: 'bold', marginBottom: 8 },
+  errorDesc: { color: '#ccc', fontSize: 14, marginBottom: 20 },
+  errorResetBtn: { backgroundColor: '#E50914', padding: 14, borderRadius: 8, alignItems: 'center' },
+  errorResetText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: '#161616',
     borderBottomWidth: 1,
-    borderBottomColor: '#222',
-    marginTop: 24,
+    borderBottomColor: '#262626',
+    alignItems: 'center'
   },
-  logo: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
+  searchContainer: { padding: 12, backgroundColor: '#141414' },
+  searchInput: {
+    backgroundColor: '#242424',
     color: '#fff',
-  },
-  navButtons: {
-    flexDirection: 'row',
-  },
-  navBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginLeft: 6,
-    borderRadius: 4,
-    backgroundColor: '#222',
-  },
-  activeNavBtn: {
-    backgroundColor: '#e50914',
-  },
-  navText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 12,
-  },
-  content: {
-    flex: 1,
-    padding: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 10,
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: '#333'
   },
   sectionTitle: {
+    color: '#fff',
     fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 12,
+    fontWeight: '700',
+    marginHorizontal: 14,
+    marginTop: 16,
+    marginBottom: 10
   },
-  columnWrapper: {
-    justifyContent: 'space-between',
-  },
-  card: {
-    width: width / 2 - 18,
-    backgroundColor: '#1e1e1e',
+  horizontalMovieCard: {
+    width: 130,
+    marginRight: 10,
+    backgroundColor: '#1a1a1a',
     borderRadius: 8,
-    marginBottom: 16,
-    overflow: 'hidden',
+    overflow: 'hidden'
   },
-  poster: {
-    width: '100%',
-    height: 220,
-    resizeMode: 'cover',
-  },
-  badge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(229, 9, 20, 0.9)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  badgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-  cardTitle: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
-    paddingHorizontal: 8,
-    marginTop: 6,
-  },
-  cardSub: {
-    color: '#aaa',
+  horizontalPoster: { width: 130, height: 180, resizeMode: 'cover', backgroundColor: '#262626' },
+  horizontalCardTitle: {
+    color: '#eee',
     fontSize: 12,
-    paddingHorizontal: 8,
-    marginBottom: 8,
+    fontWeight: '600',
+    padding: 6,
+    textAlign: 'center'
   },
-  searchBoxContainer: {
-    marginBottom: 16,
-  },
-  input: {
-    backgroundColor: '#1e1e1e',
-    color: '#fff',
-    paddingHorizontal: 12,
-    height: 44,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  loaderContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  detailsContainer: {
-    flex: 1,
-    padding: 16,
-  },
-  backButton: {
-    backgroundColor: '#222',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    alignSelf: 'flex-start',
-    marginBottom: 12,
-  },
-  backButtonText: {
-    color: '#e50914',
-    fontWeight: 'bold',
-  },
-  detailTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 10,
-  },
-  audioHint: {
-    color: '#bbb',
-    fontSize: 12,
-    marginBottom: 10,
-    backgroundColor: '#1e1e1e',
-    padding: 8,
-    borderRadius: 6,
-  },
-  epRow: {
-    flexDirection: 'row',
-    marginBottom: 12,
-  },
-  epInputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 20,
-  },
-  epLabel: {
-    color: '#fff',
-    marginRight: 8,
-    fontWeight: 'bold',
-  },
-  epInput: {
-    backgroundColor: '#222',
-    color: '#fff',
-    width: 50,
-    height: 36,
-    textAlign: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#444',
-  },
-  playerWrapper: {
-    width: '100%',
+  playerScreenContainer: { flex: 1, backgroundColor: '#0f0f0f' },
+  playerBox: {
+    width: width,
     height: 260,
     backgroundColor: '#000',
-    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    overflow: 'hidden'
+  },
+  videoElement: { width: width, height: 260, backgroundColor: '#000' },
+  spinnerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 99
+  },
+  spinnerText: { color: '#fff', marginTop: 10, fontSize: 13, fontWeight: '600' },
+  topLeftBackButton: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    backgroundColor: 'rgba(20, 20, 20, 0.85)',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    zIndex: 100
+  },
+  topLeftBackIcon: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  detailsScrollBox: { flex: 1, backgroundColor: '#0f0f0f' },
+  detailsScrollContent: { padding: 18, paddingBottom: 50 },
+  detailMovieTitle: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: 'bold',
+    lineHeight: 28,
+    marginBottom: 10
+  },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 },
+  categoryBadge: {
+    backgroundColor: 'rgba(229, 9, 20, 0.18)',
+    borderWidth: 1,
+    borderColor: '#E50914',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    marginRight: 10
+  },
+  categoryBadgeText: { color: '#E50914', fontSize: 12, fontWeight: '700' },
+  overviewText: { color: '#aaa', fontSize: 14, lineHeight: 20, marginBottom: 18 },
+  primaryDownloadBtn: {
+    backgroundColor: '#E50914',
+    paddingVertical: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 18
+  },
+  primaryDownloadBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  downloadingIndicatorBox: {
+    backgroundColor: '#1f1f1f',
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: '#333'
+  },
+  downloadingText: { color: '#fff', fontSize: 14, fontWeight: '600', marginVertical: 6 },
+  progressBarTrack: {
+    width: '100%',
+    height: 6,
+    backgroundColor: '#333',
+    borderRadius: 3,
     overflow: 'hidden',
-    marginBottom: 16,
+    marginTop: 6
   },
-  webview: {
+  progressBarFill: { height: '100%', backgroundColor: '#E50914' },
+  downloadsSectionContainer: { flex: 1 },
+  emptyDownloadsBox: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+  emptyDownloadsIcon: { fontSize: 48, marginBottom: 12 },
+  emptyDownloadsTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  downloadItemCard: {
+    flexDirection: 'row',
+    backgroundColor: '#1a1a1a',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#2a2a2a'
+  },
+  downloadThumb: { width: 70, height: 100, borderRadius: 6, backgroundColor: '#2b2b2b' },
+  downloadInfoCol: { flex: 1, marginLeft: 12, justifyContent: 'space-around' },
+  downloadItemTitle: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
+  downloadActionsRow: { flexDirection: 'row', alignItems: 'center' },
+  playOfflineBtn: {
+    backgroundColor: '#E50914',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginRight: 10
+  },
+  playOfflineBtnText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  deleteDownloadBtn: {
+    backgroundColor: '#2b2b2b',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6
+  },
+  deleteDownloadBtnText: { color: '#ccc', fontSize: 12 },
+  bottomTabBar: {
+    flexDirection: 'row',
+    height: 62,
+    backgroundColor: '#161616',
+    borderTopWidth: 1,
+    borderTopColor: '#2a2a2a',
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 12,
+    alignItems: 'center'
+  },
+  tabButton: {
     flex: 1,
+    paddingVertical: 11,
+    marginHorizontal: 6,
+    borderRadius: 8,
+    alignItems: 'center',
+    backgroundColor: '#222'
   },
-  detailOverview: {
-    color: '#aaa',
-    fontSize: 14,
-    marginBottom: 40,
-    lineHeight: 20,
-  },
+  tabButtonActive: { backgroundColor: '#E50914' },
+  tabButtonText: { color: '#aaa', fontSize: 14, fontWeight: '700' },
+  tabButtonTextActive: { color: '#fff' }
 });
