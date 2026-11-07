@@ -27,7 +27,6 @@ try {
 
 const { width } = Dimensions.get('window');
 const FIREBASE_BASE_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com";
-const RENDER_CLOUD_BACKEND = "https://sijjmoviehub.onrender.com/api/leech-and-stream?tmdb_id=";
 
 function NativeVideoPlayer({ streamUrl, onClosePlayer }) {
   const [buffering, setBuffering] = useState(true);
@@ -58,7 +57,7 @@ function NativeVideoPlayer({ streamUrl, onClosePlayer }) {
 
     const timer = setTimeout(() => {
       setBuffering(false);
-    }, 4500);
+    }, 4000);
 
     return () => {
       clearTimeout(timer);
@@ -80,7 +79,7 @@ function NativeVideoPlayer({ streamUrl, onClosePlayer }) {
       {buffering && (
         <View style={styles.spinnerOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color="#E50914" />
-          <Text style={styles.spinnerText}>Loading Telethon Stream...</Text>
+          <Text style={styles.spinnerText}>Loading Permanent Archive Stream...</Text>
         </View>
       )}
 
@@ -129,7 +128,6 @@ function MainApp() {
 
   const [selectedMovie, setSelectedMovie] = useState(null);
   const [resolvedStreamUrl, setResolvedStreamUrl] = useState(null);
-  const [resolvingStream, setResolvingStream] = useState(false);
   const [activeTab, setActiveTab] = useState('Movies');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -182,13 +180,16 @@ function MainApp() {
             const item = obj[key];
             if (!item || typeof item !== 'object') return;
             if (item.title || item.tmdb_id || item.poster) {
+              const directUrl = item.stream_url || item.terabox_url || '';
               parsedList.push({
                 id: String(item.tmdb_id || key),
                 tmdb_id: String(item.tmdb_id || key),
                 title: String(item.title || 'Untitled Movie'),
                 overview: String(item.overview || ''),
+                release_date: String(item.release_date || ''),
                 poster: String(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster'),
-                category: item.hindi_dubbed ? 'Trending Hollywood (Hindi Dubbed)' : 'Popular Updates'
+                category: item.hindi_dubbed ? 'Trending Hollywood (Hindi Dubbed)' : 'Popular Updates',
+                stream_url: String(directUrl)
               });
             } else {
               extractItems(item);
@@ -210,13 +211,18 @@ function MainApp() {
     if (Platform.OS === 'web' || !FileSystem || !FileSystem.documentDirectory) return;
     try {
       const files = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory);
-      const hiddenFiles = files.filter((f) => f.startsWith('hidden_movie_') && f.endsWith('.mp4'));
+      const hiddenFiles = files.filter(
+        (f) => f.startsWith('hidden_movie_') && (f.endsWith('.mp4') || f.endsWith('.mkv'))
+      );
       const restored = await Promise.all(
         hiddenFiles.map(async (filename) => {
           const fileUri = FileSystem.documentDirectory + filename;
           const info = await FileSystem.getInfoAsync(fileUri);
           if (!info.exists || info.size < 10000) return null;
-          const movieId = filename.replace('hidden_movie_', '').replace('.mp4', '');
+          const movieId = filename
+            .replace('hidden_movie_', '')
+            .replace('.mp4', '')
+            .replace('.mkv', '');
           return {
             id: movieId,
             title: `Offline Movie (${movieId})`,
@@ -248,54 +254,54 @@ function MainApp() {
   const handleSelectMovie = async (movie) => {
     if (!movie) return;
     setSelectedMovie(movie);
-    setResolvingStream(true);
 
     const movieId = movie.tmdb_id || movie.id;
-    const sandboxFileUri = FileSystem.documentDirectory + 'hidden_movie_' + movieId + '.mp4';
+    const ext = movie.stream_url && movie.stream_url.toLowerCase().endsWith('.mkv') ? '.mkv' : '.mp4';
+    const sandboxFileUri = FileSystem.documentDirectory + 'hidden_movie_' + movieId + ext;
 
     if (Platform.OS !== 'web' && FileSystem) {
       try {
         const info = await FileSystem.getInfoAsync(sandboxFileUri);
         if (info.exists && info.size > 10000) {
           setResolvedStreamUrl(sandboxFileUri);
-          setResolvingStream(false);
           return;
         }
       } catch (e) {}
     }
 
-    try {
-      const res = await fetch(`${RENDER_CLOUD_BACKEND}${movieId}`);
-      const data = await res.json();
-      if (data && data.success && data.stream_url) {
-        setResolvedStreamUrl(data.stream_url);
-      } else {
-        setResolvedStreamUrl(`https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4`);
-      }
-    } catch (err) {
-      setResolvedStreamUrl(`https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4`);
-    } finally {
-      setResolvingStream(false);
+    if (movie.stream_url && movie.stream_url.startsWith('http')) {
+      setResolvedStreamUrl(movie.stream_url);
+    } else {
+      Alert.alert(
+        "Stream Pending",
+        "This movie does not have a permanent Archive.org stream link synced yet."
+      );
+      setResolvedStreamUrl(null);
     }
   };
 
   const handleDownloadMovie = async () => {
-    if (!selectedMovie) return;
+    if (!selectedMovie || !resolvedStreamUrl) return;
     if (Platform.OS === 'web' || !FileSystem || !FileSystem.documentDirectory) {
-      Alert.alert("Notice", "Offline downloads only supported on Android devices.");
+      Alert.alert("Notice", "Offline downloads are only supported on Android devices.");
+      return;
+    }
+
+    if (resolvedStreamUrl.startsWith('file://')) {
+      Alert.alert("Already Downloaded", "This movie is already saved in your Offline Cache.");
       return;
     }
 
     const movieId = selectedMovie.tmdb_id || selectedMovie.id;
-    const fileUri = FileSystem.documentDirectory + 'hidden_movie_' + movieId + '.mp4';
+    const ext = resolvedStreamUrl.toLowerCase().endsWith('.mkv') ? '.mkv' : '.mp4';
+    const fileUri = FileSystem.documentDirectory + 'hidden_movie_' + movieId + ext;
 
     setDownloadingId(movieId);
     setDownloadProgress(0.01);
 
     try {
-      const targetUrl = resolvedStreamUrl;
       const downloadResumable = FileSystem.createDownloadResumable(
-        targetUrl,
+        resolvedStreamUrl,
         fileUri,
         {},
         (progressData) => {
@@ -310,22 +316,25 @@ function MainApp() {
       setDownloadingId(null);
 
       if (result && result.uri) {
+        const fileInfo = await FileSystem.getInfoAsync(result.uri);
+        const sizeMB = fileInfo.size ? `${(fileInfo.size / (1024 * 1024)).toFixed(1)} MB` : 'Cached';
+
         setDownloads((prev) => [
           {
             id: movieId,
             title: selectedMovie.title,
             poster: selectedMovie.poster,
             uri: result.uri,
-            sizeLabel: 'Cached'
+            sizeLabel: sizeMB
           },
           ...prev.filter((d) => d.id !== movieId)
         ]);
-        Alert.alert("Download Complete ✅", "Movie safely stored in private sandbox cache!");
+        Alert.alert("Download Complete ✅", "Movie saved in private offline storage!");
         setResolvedStreamUrl(result.uri);
       }
     } catch (err) {
       setDownloadingId(null);
-      Alert.alert("Download Error", "Failed to download stream.");
+      Alert.alert("Download Error", "Failed to download movie file from Archive.org.");
     }
   };
 
@@ -347,8 +356,8 @@ function MainApp() {
     );
   }
 
-  const hindiDubbedList = filteredMovies.filter(m => m.category.includes('Hindi'));
-  const popularList = filteredMovies.filter(m => !m.category.includes('Hindi'));
+  const hindiDubbedList = filteredMovies.filter((m) => m.category.includes('Hindi'));
+  const popularList = filteredMovies.filter((m) => !m.category.includes('Hindi'));
 
   return (
     <SafeAreaView style={styles.container}>
@@ -356,10 +365,9 @@ function MainApp() {
 
       {selectedMovie ? (
         <View style={styles.playerScreenContainer}>
-          {resolvingStream || !resolvedStreamUrl ? (
+          {!resolvedStreamUrl ? (
             <View style={styles.playerBox}>
-              <ActivityIndicator size="large" color="#E50914" />
-              <Text style={styles.spinnerText}>Leeching from Telegram Channel...</Text>
+              <Text style={styles.spinnerText}>No Direct Stream URL Found</Text>
               <TouchableOpacity
                 style={styles.topLeftBackButton}
                 onPress={() => {
@@ -388,6 +396,9 @@ function MainApp() {
               <View style={styles.categoryBadge}>
                 <Text style={styles.categoryBadgeText}>{selectedMovie.category}</Text>
               </View>
+              {selectedMovie.release_date ? (
+                <Text style={styles.releaseDateText}>📅 {selectedMovie.release_date}</Text>
+              ) : null}
             </View>
 
             <Text style={styles.overviewText} numberOfLines={4}>
@@ -398,7 +409,7 @@ function MainApp() {
               <View style={styles.downloadingIndicatorBox}>
                 <ActivityIndicator size="small" color="#E50914" />
                 <Text style={styles.downloadingText}>
-                  Downloading... {Math.round(downloadProgress * 100)}%
+                  Downloading from Archive.org... {Math.round(downloadProgress * 100)}%
                 </Text>
                 <View style={styles.progressBarTrack}>
                   <View style={[styles.progressBarFill, { width: `${Math.round(downloadProgress * 100)}%` }]} />
@@ -410,7 +421,11 @@ function MainApp() {
                 onPress={handleDownloadMovie}
                 activeOpacity={0.85}
               >
-                <Text style={styles.primaryDownloadBtnText}>📥 Download & Keep in App</Text>
+                <Text style={styles.primaryDownloadBtnText}>
+                  {resolvedStreamUrl && resolvedStreamUrl.startsWith('file://')
+                    ? '✅ Saved in Offline Cache'
+                    : '📥 Download & Keep in App'}
+                </Text>
               </TouchableOpacity>
             )}
           </ScrollView>
@@ -428,14 +443,14 @@ function MainApp() {
               <View style={styles.searchContainer}>
                 <TextInput
                   style={styles.searchInput}
-                  placeholder="Search movies..."
+                  placeholder="Search movies in catalog..."
                   placeholderTextColor="#888"
                   value={searchQuery}
                   onChangeText={handleSearch}
                 />
               </View>
 
-              <Text style={styles.sectionTitle}>🇮🇳 Trending Hollywood (Hindi Dubbed)</Text>
+              <Text style={styles.sectionTitle}>🇮🇳 Trending Hollywood & Hindi Dubbed</Text>
               <FlatList
                 data={hindiDubbedList.length > 0 ? hindiDubbedList : filteredMovies}
                 keyExtractor={(item, idx) => 'hindi_' + (item.id || idx)}
@@ -489,7 +504,7 @@ function MainApp() {
                       <Image source={{ uri: item.poster }} style={styles.downloadThumb} />
                       <View style={styles.downloadInfoCol}>
                         <Text style={styles.downloadItemTitle} numberOfLines={1}>
-                          {item.title}
+                          {item.title} ({item.sizeLabel})
                         </Text>
                         <View style={styles.downloadActionsRow}>
                           <TouchableOpacity
@@ -499,7 +514,8 @@ function MainApp() {
                                 id: item.id,
                                 title: item.title,
                                 category: 'Offline Sandbox',
-                                poster: item.poster
+                                poster: item.poster,
+                                stream_url: item.uri
                               });
                               setResolvedStreamUrl(item.uri);
                             }}
@@ -659,6 +675,7 @@ const styles = StyleSheet.create({
     marginRight: 10
   },
   categoryBadgeText: { color: '#E50914', fontSize: 12, fontWeight: '700' },
+  releaseDateText: { color: '#888', fontSize: 12, fontWeight: '600' },
   overviewText: { color: '#aaa', fontSize: 14, lineHeight: 20, marginBottom: 18 },
   primaryDownloadBtn: {
     backgroundColor: '#E50914',
