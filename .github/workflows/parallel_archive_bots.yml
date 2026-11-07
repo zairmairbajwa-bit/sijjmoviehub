@@ -1,0 +1,76 @@
+name: 8-Parallel Archive Movie Bots
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+jobs:
+  leech-and-archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - bot_id: 1
+            year_start: 2025
+            year_end: 2026
+            account_num: 1
+          - bot_id: 2
+            year_start: 2025
+            year_end: 2026
+            account_num: 1
+          - bot_id: 3
+            year_start: 2023
+            year_end: 2024
+            account_num: 2
+          - bot_id: 4
+            year_start: 2021
+            year_end: 2022
+            account_num: 2
+          - bot_id: 5
+            year_start: 2019
+            year_end: 2020
+            account_num: 3
+          - bot_id: 6
+            year_start: 2016
+            year_end: 2018
+            account_num: 3
+          - bot_id: 7
+            year_start: 2011
+            year_end: 2015
+            account_num: 4
+          - bot_id: 8
+            year_start: 2000
+            year_end: 2010
+            account_num: 4
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 ffmpeg python3-pip
+          pip install internetarchive requests yt-dlp
+
+      - name: Run Bot Worker #${{ matrix.bot_id }}
+        env:
+          BOT_ID: ${{ matrix.bot_id }}
+          YEAR_START: ${{ matrix.year_start }}
+          YEAR_END: ${{ matrix.year_end }}
+          IA_ACCESS_1: ${{ secrets.IA_ACCESS_1 }}
+          IA_SECRET_1: ${{ secrets.IA_SECRET_1 }}
+          IA_ACCESS_2: ${{ secrets.IA_ACCESS_2 }}
+          IA_SECRET_2: ${{ secrets.IA_SECRET_2 }}
+          IA_ACCESS_3: ${{ secrets.IA_ACCESS_3 }}
+          IA_SECRET_3: ${{ secrets.IA_SECRET_3 }}
+          IA_ACCESS_4: ${{ secrets.IA_ACCESS_4 }}
+          IA_SECRET_4: ${{ secrets.IA_SECRET_4 }}
+        run: |
+          ACC="${{ matrix.account_num }}"
+          export IA_ACCESS=$(eval echo \$IA_ACCESS_$ACC)
+          export IA_SECRET=$(eval echo \$IA_SECRET_$ACC)
+          python3 archive_bot.py
