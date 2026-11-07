@@ -92,7 +92,10 @@ def find_largest_video(folder):
     return best_file
 
 def download_movie_3_tier(tmdb_id, imdb_id, work_dir):
+    if os.path.exists(work_dir):
+        shutil.rmtree(work_dir, ignore_errors=True)
     os.makedirs(work_dir, exist_ok=True)
+
     for mag in fetch_magnets_from_torrentio(imdb_id):
         cmd = ["aria2c", "--seed-time=0", "--bt-tracker=" + TRACKERS, "--bt-stop-timeout=95", "-d", work_dir, mag]
         try:
@@ -105,7 +108,7 @@ def download_movie_3_tier(tmdb_id, imdb_id, work_dir):
         os.makedirs(work_dir, exist_ok=True)
 
     out = os.path.join(work_dir, f"movie_{tmdb_id}.mp4")
-    for url in [f"https://autoembed.cc/embed/movie/{tmdb_id}", f"https://vidlink.pro/movie/{tmdb_id}"]:
+    for url in [f"https://autoembed.cc/embed/movie/{tmdb_id}", f"https://vidlink.pro/embed/movie/{tmdb_id}"]:
         try:
             subprocess.run(["yt-dlp", "--no-part", "-f", "best[height<=1080]/best", "-o", out, url], timeout=300)
             if os.path.exists(out) and verify_video_file(out): return out
