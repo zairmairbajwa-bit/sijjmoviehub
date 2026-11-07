@@ -1,6 +1,3 @@
-httpx
+internetarchive
 requests
-firebase-admin
-telethon
-fastapi
-uvicorn
+yt-dlp
