@@ -1,4 +1,4 @@
-name: SijjMoviesHub Telegram Auto-Scraper
+name: SijjMoviesHub Hybrid Auto-Scraper
 
 on:
   workflow_dispatch: 
@@ -10,7 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Yahan humne 8 bots lagaye hain jo ek sath 8 alag servers par chalenge
       matrix:
         bot_id: [1, 2, 3, 4, 5, 6, 7, 8] 
 
@@ -28,9 +27,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          # aria2 torrents aur direct downloads dono ke liye best aur fast hai
+          sudo apt-get install -y aria2 ffmpeg
 
-      - name: Run Telegram Scraper Bot
+      - name: Run Hybrid Scraper Bot
         run: python archive_bot.py
         env:
           BOT_ID: ${{ matrix.bot_id }}
@@ -38,6 +38,3 @@ jobs:
           YEAR_END: "2026"
           IA_ACCESS: ${{ secrets.IA_ACCESS }}
           IA_SECRET: ${{ secrets.IA_SECRET }}
-          TG_API_ID: ${{ secrets.TG_API_ID }}
-          TG_API_HASH: ${{ secrets.TG_API_HASH }}
-          TG_SESSION: ${{ secrets.TG_SESSION }}
