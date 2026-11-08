@@ -1,4 +1,2 @@
 requests
 internetarchive
-telethon
-cryptg
