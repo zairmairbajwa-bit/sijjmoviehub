@@ -1,17 +1,18 @@
 name: SijjMoviesHub Telegram Auto-Scraper
 
 on:
-  workflow_dispatch: # Manual run ke liye
+  workflow_dispatch: 
   schedule:
-    - cron: '0 */4 * * *' # Har 4 ghante baad khud chalega
+    - cron: '0 */4 * * *' 
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Yahan humne 8 bots lagaye hain jo ek sath 8 alag servers par chalenge
       matrix:
-        bot_id: [1, 2, 3] # Ek sath 3 bots alag-alag movies par kaam karenge
+        bot_id: [1, 2, 3, 4, 5, 6, 7, 8] 
 
     steps:
       - name: Checkout Repository
@@ -20,26 +21,23 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Stable version
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           sudo apt-get update
-          sudo apt-get install -y ffmpeg # Video duration/size check karne ke liye
+          sudo apt-get install -y ffmpeg
 
       - name: Run Telegram Scraper Bot
         run: python archive_bot.py
         env:
-          # --- Aapki Purani Settings ---
           BOT_ID: ${{ matrix.bot_id }}
           YEAR_START: "2025"
           YEAR_END: "2026"
           IA_ACCESS: ${{ secrets.IA_ACCESS }}
           IA_SECRET: ${{ secrets.IA_SECRET }}
-          
-          # --- Naye Telegram Secrets ---
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
