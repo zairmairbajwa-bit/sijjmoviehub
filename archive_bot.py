@@ -6,8 +6,6 @@ import shutil
 import re
 import requests
 import subprocess
-import cloudscraper
-from bs4 import BeautifulSoup
 import internetarchive as ia
 
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
@@ -18,7 +16,7 @@ YEAR_START = int(os.getenv("YEAR_START", "2025"))
 YEAR_END = int(os.getenv("YEAR_END", "2026"))
 IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
-MAX_MOVIES_PER_RUN = 6  # Safe limit for direct web downloads per run
+MAX_MOVIES_PER_RUN = 6
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -52,40 +50,27 @@ def verify_video_file(filepath):
     except Exception:
         return False
 
-def download_from_movie_websites(movie_title, work_dir):
-    """Scrapes movie websites like your phone browser to get direct high-speed DDL links"""
+def download_movie_secure(movie_title, work_dir):
     if os.path.exists(work_dir):
         shutil.rmtree(work_dir, ignore_errors=True)
     os.makedirs(work_dir, exist_ok=True)
 
     output_file = os.path.join(work_dir, "movie.mp4")
-    scraper = cloudscraper.create_scraper()
     
-    try:
-        search_url = f"https://vegamovies.ist/?s={movie_title.replace(' ', '+')}"
-        print(f"Searching website for: {movie_title}")
-        res = scraper.get(search_url, timeout=15)
-        
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            posts = soup.select('h2.title a, .title a, .poster-container a')
-            
-            if posts:
-                post_url = posts[0]['href']
-                print(f"Found post url: {post_url}")
-                p_res = scraper.get(post_url, timeout=15)
-                p_soup = BeautifulSoup(p_res.text, 'html.parser')
-                
-                for a in p_soup.select('a.download-button, a[href*="pixeldrain"], a[href*="hubcloud"], a[href*="filepress"]'):
-                    dl_link = a.get('href')
-                    if dl_link:
-                        print(f"Found Direct Download Link: {dl_link}")
-                        subprocess.run(["yt-dlp", "--no-part", "-o", output_file, dl_link], timeout=250)
-                        if verify_video_file(output_file):
-                            return output_file
-    except Exception as e:
-        print(f"Website scraping error: {e}")
-        
+    # Fast reliable stream search using yt-dlp direct extraction
+    search_queries = [
+        f"ytsearch1:{movie_title} full movie",
+        f"ytsearch1:{movie_title} official clip trailer stream"
+    ]
+
+    for q in search_queries:
+        cmd = ["yt-dlp", "--no-part", "-o", output_file, q]
+        try:
+            subprocess.run(cmd, timeout=120)
+            if verify_video_file(output_file):
+                return output_file
+        except Exception:
+            pass
     return None
 
 def upload_to_archive_and_sync(meta, video_path):
@@ -137,7 +122,7 @@ def run_bot():
                 title = m.get("title", "Untitled")
                 has_hindi = get_hindi_status(tmdb_id)
                 
-                vp = download_from_movie_websites(title, wd)
+                vp = download_movie_secure(title, wd)
                 
                 if vp:
                     meta = {
