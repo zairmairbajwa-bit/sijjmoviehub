@@ -6,6 +6,8 @@ import shutil
 import re
 import requests
 import subprocess
+import cloudscraper
+from bs4 import BeautifulSoup
 import internetarchive as ia
 
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
@@ -16,10 +18,9 @@ YEAR_START = int(os.getenv("YEAR_START", "2025"))
 YEAR_END = int(os.getenv("YEAR_END", "2026"))
 IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
-MAX_MOVIES_PER_RUN = 8  # Safe limit per run to ensure fast completion without timeout
+MAX_MOVIES_PER_RUN = 6  # Safe limit for direct web downloads per run
 
 def clean_filename(name):
-    """Cleans movie title to make it a safe file name."""
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
 
 def is_already_in_firebase(tmdb_id):
@@ -51,35 +52,43 @@ def verify_video_file(filepath):
     except Exception:
         return False
 
-def download_movie_direct_ddl(movie_title, work_dir):
-    """Uses high-speed direct cloud streaming extractors and mirrors for instant downloading."""
+def download_from_movie_websites(movie_title, work_dir):
+    """Scrapes movie websites like your phone browser to get direct high-speed DDL links"""
     if os.path.exists(work_dir):
         shutil.rmtree(work_dir, ignore_errors=True)
     os.makedirs(work_dir, exist_ok=True)
 
+    scraper = cloudscraper.create_scraper()
     output_file = os.path.join(work_dir, "movie.mp4")
     
-    # Direct high-speed video provider engines supported by yt-dlp
-    search_queries = [
-        f"ytsearch1:{movie_title} hindi dubbed movie",
-        f"ytsearch1:{movie_title} full movie 1080p"
-    ]
-
-    for query in search_queries:
-        cmd = [
-            "yt-dlp", "--no-part", "--concurrent-fragments", "16",
-            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-            "--merge-output-format", "mp4",
-            "-o", output_file, query
-        ]
-        try:
-            print(f"Trying Direct Cloud Search for: {movie_title}")
-            subprocess.run(cmd, timeout=300)
-            if verify_video_file(output_file):
-                return output_file
-        except Exception as e:
-            print(f"Direct download error: {e}")
+    try:
+        # Search on popular movie indexing sites
+        search_url = f"https://vegamovies.ist/?s={movie_title.replace(' ', '+')}"
+        print(f"Searching website for: {movie_title}")
+        res = scraper.get(search_url, timeout=15)
+        
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            posts = soup.select('h2.title a, .title a, .poster-container a')
             
+            if posts:
+                post_url = posts[0]['href']
+                print(found post url: {post_url})
+                p_res = scraper.get(post_url, timeout=15)
+                p_soup = BeautifulSoup(p_res.text, 'html.parser')
+                
+                # Look for direct cloud download links (PixelDrain / HubCloud)
+                for a in p_soup.select('a.download-button, a[href*="pixeldrain"], a[href*="hubcloud"], a[href*="filepress"]'):
+                    dl_link = a.get('href')
+                    if dl_link:
+                        print(f"Found Direct Download Link: {dl_link}")
+                        # Use yt-dlp to grab the direct link file at full speed
+                        subprocess.run(["yt-dlp", "--no-part", "-o", output_file, dl_link], timeout=250)
+                        if verify_video_file(output_file):
+                            return output_file
+    except Exception as e:
+        print(f"Website scraping error: {e}")
+        
     return None
 
 def upload_to_archive_and_sync(meta, video_path):
@@ -113,13 +122,8 @@ def run_bot():
     start_time = time.time()
     
     for page in range(1, 10):
-        if completed >= MAX_MOVIES_PER_RUN: 
-            print("Reached max movies per run limit. Exiting safely.")
-            break
-            
-        if (time.time() - start_time) > 3300:
-            print("Time limit reached for this run. Stopping safely.")
-            break
+        if completed >= MAX_MOVIES_PER_RUN: break
+        if (time.time() - start_time) > 3300: break
 
         lang = "&with_original_language=hi" if (BOT_ID % 2 == 1) else ""
         url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&sort_by=popularity.desc&primary_release_date.gte={YEAR_START}-01-01&primary_release_date.lte={YEAR_END}-12-31&page={page}{lang}"
@@ -130,15 +134,14 @@ def run_bot():
                 if completed >= MAX_MOVIES_PER_RUN: break
                 
                 tmdb_id = str(m.get("id"))
-                if is_already_in_firebase(tmdb_id): 
-                    continue
+                if is_already_in_firebase(tmdb_id): continue
                 
                 wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
                 title = m.get("title", "Untitled")
                 has_hindi = get_hindi_status(tmdb_id)
                 
-                # Direct High-Speed Download (No Torrents, No Seeders check)
-                vp = download_movie_direct_ddl(title, wd)
+                # Direct website scraping & downloading (No Torrents, No YouTube)
+                vp = download_from_movie_websites(title, wd)
                 
                 if vp:
                     meta = {
@@ -148,6 +151,7 @@ def run_bot():
                         "overview": m.get("overview", ""), 
                         "release_date": m.get("release_date", ""), 
                         "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "", 
+                        "hindi_debt": has_hindi or (m.get("original_language") == "hi"),
                         "hindi_dubbed": has_hindi or (m.get("original_language") == "hi")
                     }
                     if upload_to_archive_and_sync(meta, vp): 
