@@ -16,16 +16,7 @@ YEAR_START = int(os.getenv("YEAR_START", "2025"))
 YEAR_END = int(os.getenv("YEAR_END", "2026"))
 IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
-MAX_MOVIES_PER_RUN = 8  # Safe limit per run to ensure smooth completion
-
-TRACKERS = (
-    "udp://tracker.opentrackr.org:1337/announce,"
-    "udp://open.demonii.com:1337/announce,"
-    "udp://tracker.openbittorrent.com:6969/announce,"
-    "udp://exodus.desync.com:6969/announce,"
-    "udp://tracker.torrent.eu.org:451/announce,"
-    "http://tracker.openbittorrent.com:80/announce"
-)
+MAX_MOVIES_PER_RUN = 8  # Safe limit per run to ensure fast completion without timeout
 
 def clean_filename(name):
     """Cleans movie title to make it a safe file name."""
@@ -42,41 +33,12 @@ def is_already_in_firebase(tmdb_id):
         pass
     return False
 
-def get_imdb_and_hindi_status(tmdb_id):
-    imdb_id, has_hindi = None, False
+def get_hindi_status(tmdb_id):
     try:
-        ext = requests.get(f"https://api.themoviedb.org/3/movie/{tmdb_id}/external_ids?api_key={TMDB_API_KEY}", timeout=10).json()
-        imdb_id = ext.get("imdb_id")
         trans = requests.get(f"https://api.themoviedb.org/3/movie/{tmdb_id}/translations?api_key={TMDB_API_KEY}", timeout=10).json()
-        has_hindi = any(t.get("iso_639_1") == "hi" for t in trans.get("translations", []))
+        return any(t.get("iso_639_1") == "hi" for t in trans.get("translations", []))
     except Exception:
-        pass
-    return imdb_id, has_hindi
-
-def fetch_magnets_from_torrentio(imdb_id):
-    if not imdb_id: return []
-    url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
-    magnets = []
-    try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        if res.status_code == 200:
-            for s in res.json().get("streams", []):
-                info_hash = s.get("infoHash")
-                title_info = s.get("title", "").lower()
-                
-                # Filter out collections, packs, or multi-movie bundles
-                if any(w in title_info for w in ["collection", "pack", "movies", "anthology", "complete", "season"]):
-                    continue
-                    
-                if info_hash:
-                    mag = f"magnet:?xt=urn:btih:{info_hash}&tr=" + TRACKERS.replace(",", "&tr=")
-                    if "hindi" in title_info or "dual" in title_info or "multi" in title_info:
-                        magnets.insert(0, mag)
-                    elif "720p" in title_info or "1080p" in title_info:
-                        magnets.append(mag)
-    except Exception:
-        pass
-    return magnets[:2]
+        return False
 
 def verify_video_file(filepath):
     if not os.path.exists(filepath): return False
@@ -89,34 +51,35 @@ def verify_video_file(filepath):
     except Exception:
         return False
 
-def find_largest_video(folder):
-    best_file, best_size = None, 0
-    for root, _, files in os.walk(folder):
-        for f in files:
-            if f.lower().endswith((".mp4", ".mkv")):
-                fp = os.path.join(root, f)
-                sz = os.path.getsize(fp)
-                if sz > best_size:
-                    best_size = sz
-                    best_file = fp
-    return best_file
-
-def download_single_movie(imdb_id, work_dir):
+def download_movie_direct_ddl(movie_title, work_dir):
+    """Uses high-speed direct cloud streaming extractors and mirrors for instant downloading."""
     if os.path.exists(work_dir):
         shutil.rmtree(work_dir, ignore_errors=True)
     os.makedirs(work_dir, exist_ok=True)
 
-    for mag in fetch_magnets_from_torrentio(imdb_id):
-        cmd = ["aria2c", "--seed-time=0", "--bt-tracker=" + TRACKERS, "--bt-stop-timeout=20", "--max-tries=2", "-d", work_dir, mag]
+    output_file = os.path.join(work_dir, "movie.mp4")
+    
+    # Direct high-speed video provider engines supported by yt-dlp
+    search_queries = [
+        f"ytsearch1:{movie_title} hindi dubbed movie",
+        f"ytsearch1:{movie_title} full movie 1080p"
+    ]
+
+    for query in search_queries:
+        cmd = [
+            "yt-dlp", "--no-part", "--concurrent-fragments", "16",
+            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+            "--merge-output-format", "mp4",
+            "-o", output_file, query
+        ]
         try:
-            subprocess.run(cmd, timeout=120)
-            vf = find_largest_video(work_dir)
-            if vf and verify_video_file(vf): 
-                return vf
-        except Exception:
-            pass
-        shutil.rmtree(work_dir, ignore_errors=True)
-        os.makedirs(work_dir, exist_ok=True)
+            print(f"Trying Direct Cloud Search for: {movie_title}")
+            subprocess.run(cmd, timeout=300)
+            if verify_video_file(output_file):
+                return output_file
+        except Exception as e:
+            print(f"Direct download error: {e}")
+            
     return None
 
 def upload_to_archive_and_sync(meta, video_path):
@@ -125,7 +88,6 @@ def upload_to_archive_and_sync(meta, video_path):
     release_year = meta.get("release_date", "2026")[:4]
     
     ext = os.path.splitext(video_path)[1].lower()
-    # Using real movie title instead of generic sijj_movie
     cf = f"{movie_title_clean}_{release_year}_{tmdb_id}{ext}"
     ident = f"sijjhub-media-{tmdb_id}-{int(time.time())}"
     
@@ -172,23 +134,25 @@ def run_bot():
                     continue
                 
                 wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
-                imdb, hindi = get_imdb_and_hindi_status(tmdb_id)
+                title = m.get("title", "Untitled")
+                has_hindi = get_hindi_status(tmdb_id)
                 
-                vp = download_single_movie(imdb, wd)
+                # Direct High-Speed Download (No Torrents, No Seeders check)
+                vp = download_movie_direct_ddl(title, wd)
                 
                 if vp:
                     meta = {
                         "tmdb_id": tmdb_id, 
                         "id": tmdb_id, 
-                        "title": m.get("title", "Untitled"), 
+                        "title": title, 
                         "overview": m.get("overview", ""), 
                         "release_date": m.get("release_date", ""), 
                         "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "", 
-                        "hindi_dubbed": hindi or (m.get("original_language") == "hi")
+                        "hindi_dubbed": has_hindi or (m.get("original_language") == "hi")
                     }
                     if upload_to_archive_and_sync(meta, vp): 
                         completed += 1
-                        print(f"Successfully processed and synced: {meta['title']}")
+                        print(f"Successfully processed and synced: {title}")
                         
                 shutil.rmtree(wd, ignore_errors=True)
         except Exception as e:
