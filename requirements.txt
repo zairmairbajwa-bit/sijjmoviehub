@@ -1,3 +1,4 @@
-internetarchive
 requests
-yt-dlp
+cloudscraper
+beautifulsoup4
+internetarchive
