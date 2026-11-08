@@ -58,11 +58,10 @@ def download_from_movie_websites(movie_title, work_dir):
         shutil.rmtree(work_dir, ignore_errors=True)
     os.makedirs(work_dir, exist_ok=True)
 
-    scraper = cloudscraper.create_scraper()
     output_file = os.path.join(work_dir, "movie.mp4")
+    scraper = cloudscraper.create_scraper()
     
     try:
-        # Search on popular movie indexing sites
         search_url = f"https://vegamovies.ist/?s={movie_title.replace(' ', '+')}"
         print(f"Searching website for: {movie_title}")
         res = scraper.get(search_url, timeout=15)
@@ -73,16 +72,14 @@ def download_from_movie_websites(movie_title, work_dir):
             
             if posts:
                 post_url = posts[0]['href']
-                print(found post url: {post_url})
+                print(f"Found post url: {post_url}")
                 p_res = scraper.get(post_url, timeout=15)
                 p_soup = BeautifulSoup(p_res.text, 'html.parser')
                 
-                # Look for direct cloud download links (PixelDrain / HubCloud)
                 for a in p_soup.select('a.download-button, a[href*="pixeldrain"], a[href*="hubcloud"], a[href*="filepress"]'):
                     dl_link = a.get('href')
                     if dl_link:
                         print(f"Found Direct Download Link: {dl_link}")
-                        # Use yt-dlp to grab the direct link file at full speed
                         subprocess.run(["yt-dlp", "--no-part", "-o", output_file, dl_link], timeout=250)
                         if verify_video_file(output_file):
                             return output_file
@@ -140,7 +137,6 @@ def run_bot():
                 title = m.get("title", "Untitled")
                 has_hindi = get_hindi_status(tmdb_id)
                 
-                # Direct website scraping & downloading (No Torrents, No YouTube)
                 vp = download_from_movie_websites(title, wd)
                 
                 if vp:
@@ -151,7 +147,6 @@ def run_bot():
                         "overview": m.get("overview", ""), 
                         "release_date": m.get("release_date", ""), 
                         "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "", 
-                        "hindi_debt": has_hindi or (m.get("original_language") == "hi"),
                         "hindi_dubbed": has_hindi or (m.get("original_language") == "hi")
                     }
                     if upload_to_archive_and_sync(meta, vp): 
