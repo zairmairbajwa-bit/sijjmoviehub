@@ -5,12 +5,21 @@ import json
 import shutil
 import re
 import requests
-import subprocess
-import concurrent.futures
+import asyncio
 import internetarchive as ia
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.tl.functions.messages import SearchGlobalRequest
+from telethon.tl.types import InputMessagesFilterVideo
 
+# === APKI API KEYS ===
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com"
+
+# === TELEGRAM KEYS (GitHub Secrets se aayengi) ===
+TG_API_ID = os.getenv("TG_API_ID")
+TG_API_HASH = os.getenv("TG_API_HASH")
+TG_SESSION = os.getenv("TG_SESSION")
 
 BOT_ID = int(os.getenv("BOT_ID", "1"))
 YEAR_START = int(os.getenv("YEAR_START", "2025"))
@@ -18,16 +27,8 @@ YEAR_END = int(os.getenv("YEAR_END", "2026"))
 IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
 
-MAX_MOVIES_PER_RUN = 20  # Ab limit barha di hai kyunki bot slow movies ko instantly drop kar dega
-MAX_PARALLEL_WORKERS = 3 # Ek sath 3 movies chalengi taake GitHub server par zyada load na pade
-
-TRACKERS = (
-    "udp://tracker.opentrackr.org:1337/announce,"
-    "udp://open.demonii.com:1337/announce,"
-    "udp://tracker.openbittorrent.com:6969/announce,"
-    "udp://exodus.desync.com:6969/announce,"
-    "udp://tracker.torrent.eu.org:451/announce"
-)
+# GitHub limit ki wajah se ek waqt mein 5-6 movies ka target best hai
+MAX_MOVIES_PER_RUN = 5
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -53,51 +54,6 @@ def get_imdb_and_hindi_status(tmdb_id):
     except Exception:
         pass
     return imdb_id, has_hindi
-
-def fetch_fast_magnets(imdb_id):
-    if not imdb_id: return []
-    url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
-    magnets = []
-    try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        if res.status_code == 200:
-            for s in res.json().get("streams", []):
-                title_info = s.get("title", "").lower()
-                # Reject giant packs to save server space
-                if any(w in title_info for w in ["collection", "pack", "movies", "anthology", "complete", "season", "2160p", "4k"]):
-                    continue
-                info_hash = s.get("infoHash")
-                if info_hash:
-                    mag = f"magnet:?xt=urn:btih:{info_hash}&tr=" + TRACKERS.replace(",", "&tr=")
-                    if "hindi" in title_info or "dual" in title_info or "multi" in title_info:
-                        magnets.insert(0, mag)
-                    elif "720p" in title_info or "1080p" in title_info:
-                        magnets.append(mag)
-    except Exception:
-        pass
-    return magnets[:3] # Top 3 fast links
-
-def verify_video_file(filepath):
-    if not os.path.exists(filepath): return False
-    size_mb = os.path.getsize(filepath) / (1024 * 1024)
-    if size_mb < 300 or size_mb > 5000: return False
-    try:
-        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath]
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
-        return (float(output) / 60.0) >= 35.0
-    except Exception:
-        return False
-
-def find_largest_video(folder):
-    best_file, best_size = None, 0
-    for root, _, files in os.walk(folder):
-        for f in files:
-            if f.lower().endswith((".mp4", ".mkv", ".avi")):
-                fp = os.path.join(root, f)
-                sz = os.path.getsize(fp)
-                if sz > best_size:
-                    best_size, best_file = sz, fp
-    return best_file
 
 def upload_to_archive_and_sync(meta, video_path):
     tmdb_id = str(meta["id"])
@@ -125,107 +81,96 @@ def upload_to_archive_and_sync(meta, video_path):
         return True
     return False
 
-def process_single_movie(m):
-    """Worker function: Ek single thread jo aik movie ko handle karega"""
-    tmdb_id = str(m.get("id"))
-    title = m.get("title", "Untitled")
+async def fetch_movie_from_telegram(client, movie_title, work_dir):
+    """Telegram par globally movie search karega aur pehli HD file download karega"""
+    os.makedirs(work_dir, exist_ok=True)
+    # Hindi dubbed movies dhoondhne ke liye search query
+    search_query = f"{movie_title} hindi"
     
-    wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
-    os.makedirs(wd, exist_ok=True)
-    
-    imdb, hindi = get_imdb_and_hindi_status(tmdb_id)
-    magnets = fetch_fast_magnets(imdb)
-    
-    if not magnets:
-        shutil.rmtree(wd, ignore_errors=True)
-        return f"SKIP: No valid links for {title}"
-
-    vp = None
-    for mag in magnets:
-        # Strict logic: 15s connection wait, minimum speed 1.5MB/s. Dropped instantly if slow!
-        cmd = [
-            "aria2c", 
-            "--seed-time=0", 
-            "--bt-stop-timeout=15", 
-            "--lowest-speed-limit=1500K", 
-            "--max-overall-download-limit=0", 
-            "--max-tries=2", 
-            "-d", wd, 
-            mag
-        ]
-        try:
-            # Maximum 5 mins wait per movie. Agar 5 min mein na ho toh timeout.
-            subprocess.run(cmd, timeout=300)
-            vf = find_largest_video(wd)
-            if vf and verify_video_file(vf):
-                vp = vf
-                break # Movie fast download ho gayi, loop break karo
-        except subprocess.TimeoutExpired:
-            print(f"Timeout - {title} took too long.")
-        except Exception:
-            pass
+    print(f"Searching Telegram for: {search_query}")
+    try:
+        # Telegram par global search lagana
+        result = await client(SearchGlobalRequest(
+            q=search_query,
+            filter=InputMessagesFilterVideo(),
+            min_date=None,
+            max_date=None,
+            offset_rate=0,
+            offset_peer='Empty',
+            offset_id=0,
+            limit=10
+        ))
         
-        # Link fail hone par kachra saaf karo taake disk full na ho
-        for f in os.listdir(wd):
-            f_path = os.path.join(wd, f)
-            if os.path.isfile(f_path): os.remove(f_path)
-
-    if vp:
-        meta = {
-            "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
-            "overview": m.get("overview", ""), "release_date": m.get("release_date", ""), 
-            "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "", 
-            "hindi_dubbed": hindi or (m.get("original_language") == "hi")
-        }
-        success = upload_to_archive_and_sync(meta, vp)
-        shutil.rmtree(wd, ignore_errors=True)
-        if success:
-            return f"SUCCESS: Downloaded & Synced {title}"
-        return f"FAILED: Upload error for {title}"
+        for msg in result.messages:
+            # 350MB se badi file uthayenge taake 360p ya sample videos na aa jayein
+            if msg.document and msg.file.size > 350 * 1024 * 1024:
+                print(f"File found! Size: {msg.file.size / (1024*1024):.2f} MB. Downloading with high speed...")
+                
+                file_path = await client.download_media(msg, file=work_dir)
+                if file_path:
+                    print(f"Download complete: {file_path}")
+                    return file_path
+    except Exception as e:
+        print(f"Telegram search error: {e}")
         
-    shutil.rmtree(wd, ignore_errors=True)
-    return f"FAILED: Slow seeds - dropped {title}"
+    return None
 
-def run_bot():
+async def main():
+    if not TG_API_ID or not TG_API_HASH or not TG_SESSION:
+        print("ERROR: Telegram API Keys aur Session String Github Secrets se nahi mil rahi!")
+        return
+
+    print("Connecting to Telegram...")
+    client = TelegramClient(StringSession(TG_SESSION), int(TG_API_ID), TG_API_HASH)
+    await client.connect()
+    
+    if not await client.is_user_authorized():
+        print("Telegram Session invalid hai ya expire ho gaya hai!")
+        return
+    print("Telegram Connected Successfully!")
+        
+    completed = 0
     start_time = time.time()
-    movies_to_process = []
     
-    # 1. Pehle page se movies scan karo (MAX_MOVIES_PER_RUN tak)
-    for page in range(1, 15):
-        if len(movies_to_process) >= MAX_MOVIES_PER_RUN: break
-        
+    for page in range(1, 10):
+        if completed >= MAX_MOVIES_PER_RUN: break
+        if (time.time() - start_time) > 3300: break # 55 minutes max limit
+
         lang = "&with_original_language=hi" if (BOT_ID % 2 == 1) else ""
         url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&sort_by=popularity.desc&primary_release_date.gte={YEAR_START}-01-01&primary_release_date.lte={YEAR_END}-12-31&page={page}{lang}"
         
         try:
             res = requests.get(url, timeout=15).json()
             for m in res.get("results", []):
-                tmdb_id = str(m.get("id"))
-                if not is_already_in_firebase(tmdb_id):
-                    movies_to_process.append(m)
-                if len(movies_to_process) >= MAX_MOVIES_PER_RUN: break
-        except Exception as e:
-            print(f"API fetch error: {e}")
-
-    print(f"Ready to process {len(movies_to_process)} new movies in Parallel...")
-
-    # 2. Multi-Threading shuru (3 movies aik waqt mein)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
-        futures = {executor.submit(process_single_movie, m): m for m in movies_to_process}
-        
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                result = future.result()
-                print(result)
-            except Exception as e:
-                print(f"Thread Error: {e}")
+                if completed >= MAX_MOVIES_PER_RUN: break
                 
-            # Har movie ke baad check karo ke 55 minutes (3300 seconds) cross toh nahi hue
-            if (time.time() - start_time) > 3300:
-                print("1 Hour Time limit approaching. Stopping gracefully...")
-                # Cancel remaining tasks taake GitHub ban na kare
-                executor.shutdown(wait=False, cancel_futures=True) 
-                break
+                tmdb_id = str(m.get("id"))
+                if is_already_in_firebase(tmdb_id): continue
+                
+                title = m.get("title", "Untitled")
+                imdb, hindi = get_imdb_and_hindi_status(tmdb_id)
+                wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
+                
+                # Direct Telegram Cloud se Download
+                vp = await fetch_movie_from_telegram(client, title, wd)
+                
+                if vp:
+                    meta = {
+                        "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
+                        "overview": m.get("overview", ""), "release_date": m.get("release_date", ""), 
+                        "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "", 
+                        "hindi_dubbed": hindi or (m.get("original_language") == "hi")
+                    }
+                    if upload_to_archive_and_sync(meta, vp):
+                        completed += 1
+                        print(f"Successfully processed and synced: {title}")
+                        
+                shutil.rmtree(wd, ignore_errors=True)
+        except Exception as e:
+            print(f"Run exception encountered: {e}")
+            pass
+
+    await client.disconnect()
 
 if __name__ == "__main__":
-    run_bot()
+    asyncio.run(main())

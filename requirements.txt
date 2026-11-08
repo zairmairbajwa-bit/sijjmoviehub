@@ -1,4 +1,4 @@
 requests
 internetarchive
-tqdm
-yt-dlp
+telethon
+cryptg
