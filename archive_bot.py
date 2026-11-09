@@ -99,8 +99,13 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
-# FALLBACK METHOD 2: Aria2c Downloader (Zabardasti Download karega)
+# FALLBACK METHOD 2: Aria2c Downloader
 def download_with_aria2(url, work_dir, referer_url):
+    # Sirf us waqt Aria2 chalega agar URL mein media file ya direct downloader ho!
+    if url.lower().endswith(".html"):
+        print(f"Skipping Aria2c: URL is an HTML page, not a direct media link ({url})")
+        return None
+        
     print(f"Starting Aria2c Fast Download: {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
@@ -260,18 +265,18 @@ async def run_bot():
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
-            # Popups handler
-            popups = []
-            def handle_popup(popup):
-                popups.append(popup)
-            page.on("popup", handle_popup)
-            
-            # --- METHOD 1: Playwright Click (Wait 60s) ---
+            # --- BARA FIX YAHAN HAI ---
             method_1_success = False
             try:
                 print(f"Method 1: Clicking download button for {res_label}...")
-                async with page.expect_download(timeout=60000) as download_info:
+                
+                # Context par wait karna zaroori hai, taake naye tab ki download bhi pakar sakay!
+                async with context.expect_download(timeout=90000) as download_info:
                     await target_link.click(force=True)
+                    # Kuch websites ko fake clicks pasand hote hain ad hataane ke liye
+                    await page.wait_for_timeout(1000)
+                    await target_link.click(force=True)
+                    
                 download = await download_info.value
                 print("Download triggered via Click!")
                 
@@ -287,9 +292,9 @@ async def run_bot():
                     method_1_success = True
                     
             except Exception as e:
-                print(f"Method 1 Timeout: Browser might be playing video natively instead of downloading. Shifting to Method 2 (Aria2c)...")
+                print(f"Method 1 Timeout or Failed: {e}. Moving to Method 2...")
 
-            # --- METHOD 2: Aria2c Fallback (Force Download) ---
+            # --- METHOD 2: Aria2c Fallback ---
             if not method_1_success:
                 print("Trying Method 2 (Aria2c Direct Fetch)...")
                 if target_link_href:
@@ -299,14 +304,6 @@ async def run_bot():
                         print(f"Download complete via Aria2c: {path}")
                 else:
                     print("Target link missing for Method 2.")
-
-            # Close any popups generated
-            for p in popups:
-                try:
-                    await p.close()
-                except:
-                    pass
-            page.remove_listener("popup", handle_popup)
 
             # Sync to Archive/Firebase
             if any(downloaded_paths.values()):
