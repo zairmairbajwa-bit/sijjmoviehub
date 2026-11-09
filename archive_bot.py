@@ -5,7 +5,7 @@ import asyncio
 import re
 import urllib.parse
 from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
+from playwright_stealth import Stealth 
 import requests
 import subprocess
 import internetarchive as ia
@@ -23,7 +23,6 @@ IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
 
 MAX_MOVIES_PER_RUN = 3
-MIN_FILE_SIZE = 150 * 1024 * 1024  # 150 MB Minimum
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -92,7 +91,6 @@ def download_with_aria2(url, work_dir):
     return None
 
 async def handle_new_page(popup):
-    """Sirf Pop-up Ads ko foran band karne ki logic"""
     try:
         print(f"Blocked pop-up ad tab.")
         await popup.close()
@@ -100,9 +98,18 @@ async def handle_new_page(popup):
         pass
 
 async def search_and_extract_mp4moviez(page, movie_title):
-    search_url = f"https://mp4moviez.computer/search.php?keyword={urllib.parse.quote(movie_title)}"
+    # Sirf pehle word se search karein taake result zyada asani se mile
+    first_word = movie_title.split()[0] if movie_title else ""
+    search_url = f"https://mp4moviez.computer/search.php?keyword={urllib.parse.quote(first_word)}"
     print(f"Searching mp4moviez: {search_url}")
     await page.goto(search_url, timeout=60000)
+    
+    # [DEBUG EYES] Bot ko kya nazar aa raha hai?
+    page_title = await page.title()
+    print(f"[DEBUG] Page Title Seen By Bot: '{page_title}'")
+    
+    if "Just a moment" in page_title or "Cloudflare" in page_title:
+        print("[DEBUG WARNING] Cloudflare ne bot ko block kar ke challenge page dikha diya hai!")
     
     try:
         btn = page.locator("text=/(YES|AGREE|ACCEPT|ENTER|OK)/i").first
@@ -118,15 +125,22 @@ async def search_and_extract_mp4moviez(page, movie_title):
     try:
         links = await page.locator("a").all()
         target_movie_page = None
+        found_texts = []
+        
         for link in links:
             text = await link.inner_text()
             href = await link.get_attribute("href")
             
-            if href and "movie" in href and movie_title.lower()[:5] in text.lower():
+            if text and len(text.strip()) > 2:
+                found_texts.append(text.strip())
+            
+            # Match Logic Relax kar di gayi hai (Pehlay 4 letters)
+            if href and first_word.lower()[:4] in text.lower():
                 target_movie_page = href
                 break
         
         if not target_movie_page:
+            print(f"[DEBUG] No match found. Bot saw these links on the page: {found_texts[:10]} ...")
             print("Movie not found on mp4moviez.")
             return movie_links
 
@@ -164,14 +178,11 @@ async def run_bot():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
         page = await context.new_page()
-        
-        # YAHAN FIX LAGAYA GAYA HAI - Ab yeh sirf popup ads marega, main page nahi
         page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
-        
         await Stealth().apply_stealth_async(page)
         
         for p_num in range(BOT_ID, 50, 8):
