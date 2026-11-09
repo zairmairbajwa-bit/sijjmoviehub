@@ -138,9 +138,10 @@ async def get_paginated_movies(page, start_url):
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
     
+    # SAB BOTS KE URLS 100% FIXED
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
-        2: "url?id=28",
+        2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
         3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
         4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
     }
@@ -187,7 +188,6 @@ async def run_bot():
                 print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                 continue
             
-            # === LINK GRABBER ===
             all_links = await page.locator("a").all()
             target_link = None
             target_link_href = None
@@ -239,16 +239,14 @@ async def run_bot():
             downloaded_paths = {}
             download = None
 
-            # --- POPUP TRACKING SYSTEM ---
             popups = []
             def handle_popup(popup):
                 popups.append(popup)
             page.on("popup", handle_popup)
             
-            # --- COMBO DOWNLOADER (CLICK -> GOTO) ---
             try:
                 print(f"Method 1: Clicking download button for {res_label}...")
-                async with page.expect_download(timeout=60000) as download_info:
+                async with page.expect_download(timeout=120000) as download_info:
                     await target_link.click(force=True)
                 download = await download_info.value
                 print("Download triggered via Click!")
@@ -256,14 +254,13 @@ async def run_bot():
                 print(f"Click failed or timed out: {e}. Trying Method 2 (Goto)...")
                 try:
                     if target_link_href:
-                        async with page.expect_download(timeout=60000) as download_info:
+                        async with page.expect_download(timeout=120000) as download_info:
                             await page.goto(target_link_href)
                         download = await download_info.value
                         print("Download triggered via Goto!")
                 except Exception as e2:
                     print(f"Goto also failed: {e2}")
 
-            # JAISE HI DOWNLOAD START HUI, POPUPS KO KILL KAR DO
             for p in popups:
                 try:
                     await p.close()
@@ -273,7 +270,6 @@ async def run_bot():
                     
             page.remove_listener("popup", handle_popup)
 
-            # --- SAVE THE FILE ---
             if download:
                 file_name = download.suggested_filename
                 if file_name.lower().endswith(".html"):
