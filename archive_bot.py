@@ -38,22 +38,20 @@ def is_already_in_firebase(tmdb_id):
     return False
 
 def search_tmdb_from_title(raw_title):
-    """Website ke ganday title ko saaf kar ke TMDB se asali ID nikalna"""
-    # Bracket wali cheezein (2026), [HD] mita do
+    """Website ke title ko saaf kar ke TMDB se asali ID aur Data nikalna"""
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', raw_title)
-    # Fuzool words mita do
     clean = re.sub(r'(?i)(hindi dubbed|full movie|download|mp4moviez|hdrip|bluray|web-dl|1080p|720p|480p|movies|series|season|episode|ep).*', '', clean)
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
-    print(f"[TMDB] Website par movie mili. TMDB par search ho raha hai: '{clean}'")
+    print(f"[TMDB] Searching clean title on TMDB: '{clean}'")
     
     url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean)}&language=hi"
     try:
         res = requests.get(url, timeout=10).json()
         results = res.get("results", [])
         if results:
-            print(f"[TMDB] Match Mil Gaya! Asli Naam: {results[0].get('title')} ({results[0].get('release_date')})")
+            print(f"[TMDB] Match Found! Official Name: {results[0].get('title')} ({results[0].get('release_date')})")
             return results[0]
     except Exception as e:
         print(f"TMDB Error: {e}")
@@ -118,9 +116,9 @@ async def handle_new_page(popup):
     except:
         pass
 
-async def get_movies_from_category(page, category_url):
-    """Category page (Hollywood/Bollywood) par ja kar sab movies ke links nikalna"""
-    print(f"Scanning Category: {category_url}")
+async def get_year_folders(page, category_url):
+    """Main category se (2026, 2025) wale folders nikalna"""
+    print(f"Scanning Main Category for Year Folders: {category_url}")
     await page.goto(category_url, timeout=60000)
     
     try:
@@ -132,29 +130,51 @@ async def get_movies_from_category(page, category_url):
         pass 
         
     links = await page.locator("a").all()
-    movie_urls = set()
+    year_folders = []
+    
+    for link in links:
+        text = await link.inner_text()
+        href = await link.get_attribute("href")
+        
+        # Link mein (2026) ya 2025 jaisa saal likha hona chahiye
+        if href and text and re.search(r'\b(19|20)\d{2}\b', text):
+            abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
+            # Make sure it's a folder, not a direct movie link
+            if abs_url not in year_folders and not re.search(r'/\d+/[^/]+\.html$', abs_url):
+                year_folders.append(abs_url)
+                
+    return year_folders
+
+async def get_movies_from_year_page(page, year_url):
+    """Year folder se movies nikalna (Nayi movies pehle)"""
+    print(f"Scanning Year Folder for Movies: {year_url}")
+    await page.goto(year_url, timeout=60000)
+    
+    links = await page.locator("a").all()
+    movie_urls = [] # List banayi hai taake naya uper aur purana neechay rahe
+    
     for link in links:
         href = await link.get_attribute("href")
         if href:
             abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-            # Agar link mein .html hai aur woh category nahi hai toh woh movie ka page hoga
-            if abs_url.endswith(".html") and "category" not in abs_url.lower() and "search" not in abs_url.lower():
-                movie_urls.add(abs_url)
-    
-    return list(movie_urls)
+            # Yeh ID wala direct movie link hona chahiye
+            if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
+                if abs_url not in movie_urls:
+                    movie_urls.append(abs_url)
+                    
+    return movie_urls
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub REVERSE Scraper Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Deep Directory Scraper Bot ID: {BOT_ID}")
     
-    # 4 Bots ke liye 4 alag Categories taake koi apas mein na takraye
+    # Sirf Hollywood, Bollywood aur Punjabi Categories par focus (Bhojpuri/South ignored)
     TARGET_CATEGORIES = [
-        "https://mp4moviez.computer/",
         "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
         "https://mp4moviez.computer/category/latest-bollywood-movies.html",
-        "https://mp4moviez.computer/category/south-indian-hindi-dubbed-movies.html"
+        "https://mp4moviez.computer/category/punjabi-movies.html",
+        "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html" # Bot 4 ke liye repeat
     ]
     
-    # Bot ID ke hisaab se uski category select hogi
     my_category = TARGET_CATEGORIES[(BOT_ID - 1) % len(TARGET_CATEGORIES)]
     
     completed = 0
@@ -170,76 +190,82 @@ async def run_bot():
         page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
         await Stealth().apply_stealth_async(page)
         
-        # Step 1: Category page se saari movies nikalna
-        movie_pages = await get_movies_from_category(page, my_category)
-        print(f"Found {len(movie_pages)} movies in category!")
+        # Step 1: Get Year Folders (e.g., 2026, 2025)
+        year_folders = await get_year_folders(page, my_category)
+        print(f"Found {len(year_folders)} Year Folders!")
         
-        # Step 2: Ek ek movie page par ja kar links nikalna aur TMDB match karna
-        for m_url in movie_pages:
+        # Step 2: Har saal ke folder mein jana
+        for y_url in year_folders:
             if completed >= MAX_MOVIES_PER_RUN: break
-            if (time.time() - start_time) > 20000: break 
+            if (time.time() - start_time) > 20000: break
+            
+            movie_pages = await get_movies_from_year_page(page, y_url)
+            print(f"Found {len(movie_pages)} REAL movies in {y_url} (Newest First)!")
+            
+            # Step 3: Nayi movies se shuru kar ke download karna
+            for m_url in movie_pages:
+                if completed >= MAX_MOVIES_PER_RUN: break
+                if (time.time() - start_time) > 20000: break 
 
-            print(f"\n--- Opening Movie Page: {m_url} ---")
-            await page.goto(m_url, timeout=60000)
-            
-            raw_title = await page.title()
-            
-            # TMDB par movie verify karo
-            tmdb_data = search_tmdb_from_title(raw_title)
-            if not tmdb_data:
-                print("Could not match with TMDB. Skipping...")
-                continue
+                print(f"\n--- Opening Movie Page: {m_url} ---")
+                await page.goto(m_url, timeout=60000)
                 
-            tmdb_id = str(tmdb_data["id"])
-            if is_already_in_firebase(tmdb_id):
-                print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
-                continue
-            
-            # 480p, 720p, 1080p pakro
-            movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
-            all_download_links = await page.locator("a").all()
-            for link in all_download_links:
-                text = await link.inner_text()
-                href = await link.get_attribute("href")
+                raw_title = await page.title()
                 
-                if not href or "Jio Users Only" in text:
+                tmdb_data = search_tmdb_from_title(raw_title)
+                if not tmdb_data:
+                    print("Could not match with TMDB. Skipping...")
                     continue
                     
-                href = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if not href.lower().endswith(".mp4"):
+                tmdb_id = str(tmdb_data["id"])
+                if is_already_in_firebase(tmdb_id):
+                    print(f"Movie {tmdb_id} is already in Firebase. Skipping to next...")
                     continue
+                
+                movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
+                all_download_links = await page.locator("a").all()
+                for link in all_download_links:
+                    text = await link.inner_text()
+                    href = await link.get_attribute("href")
                     
-                text = text.lower()
-                if "480p" in text and not movie_links["url_480p"]: movie_links["url_480p"] = href
-                elif "720p" in text and not movie_links["url_720p"]: movie_links["url_720p"] = href
-                elif "1080p" in text and not movie_links["url_1080p"]: movie_links["url_1080p"] = href
-
-            if any(movie_links.values()):
-                wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
-                os.makedirs(wd, exist_ok=True)
-                
-                downloaded_paths = {}
-                for res_label, dl_link in movie_links.items():
-                    if dl_link:
-                        path = download_with_aria2(dl_link, wd)
-                        if path: downloaded_paths[res_label] = path
-                
-                if any(downloaded_paths.values()):
-                    title = tmdb_data.get("title", "Untitled")
-                    meta = {
-                        "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
-                        "overview": tmdb_data.get("overview", ""), "release_date": tmdb_data.get("release_date", ""), 
-                        "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
-                        "hindi_dubbed": True 
-                    }
-                    if upload_to_archive_and_sync(meta, downloaded_paths):
-                        completed += 1
-                        print(f"Successfully synced {title} with multiple resolutions!")
+                    if not href or "Jio Users Only" in text:
+                        continue
                         
-                shutil.rmtree(wd, ignore_errors=True)
-            else:
-                print("No direct mp4 links found on this page.")
-                
+                    href = urllib.parse.urljoin(BASE_DOMAIN, href)
+                    if not href.lower().endswith(".mp4"):
+                        continue
+                        
+                    text = text.lower()
+                    if "480p" in text and not movie_links["url_480p"]: movie_links["url_480p"] = href
+                    elif "720p" in text and not movie_links["url_720p"]: movie_links["url_720p"] = href
+                    elif "1080p" in text and not movie_links["url_1080p"]: movie_links["url_1080p"] = href
+
+                if any(movie_links.values()):
+                    wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
+                    os.makedirs(wd, exist_ok=True)
+                    
+                    downloaded_paths = {}
+                    for res_label, dl_link in movie_links.items():
+                        if dl_link:
+                            path = download_with_aria2(dl_link, wd)
+                            if path: downloaded_paths[res_label] = path
+                    
+                    if any(downloaded_paths.values()):
+                        title = tmdb_data.get("title", "Untitled")
+                        meta = {
+                            "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
+                            "overview": tmdb_data.get("overview", ""), "release_date": tmdb_data.get("release_date", ""), 
+                            "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
+                            "hindi_dubbed": True 
+                        }
+                        if upload_to_archive_and_sync(meta, downloaded_paths):
+                            completed += 1
+                            print(f"Successfully synced {title} with multiple resolutions!")
+                            
+                    shutil.rmtree(wd, ignore_errors=True)
+                else:
+                    print("No direct mp4 links found on this page.")
+                    
         await browser.close()
     print("Bot run completed.")
 
