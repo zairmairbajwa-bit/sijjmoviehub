@@ -14,6 +14,7 @@ import shutil
 # === APKI API KEYS ===
 TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com"
+BASE_DOMAIN = "https://mp4moviez.computer"
 
 # === BOT SETTINGS ===
 BOT_ID = int(os.getenv("BOT_ID", "1"))
@@ -98,18 +99,19 @@ async def handle_new_page(popup):
         pass
 
 async def search_and_extract_mp4moviez(page, movie_title):
-    # Sirf pehle word se search karein taake result zyada asani se mile
-    first_word = movie_title.split()[0] if movie_title else ""
-    search_url = f"https://mp4moviez.computer/search.php?keyword={urllib.parse.quote(first_word)}"
+    # Search ke liye movie ka naam saaf karna
+    clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', movie_title).strip()
+    words = clean_title.split()
+    if not words:
+        return {"url_480p": None, "url_720p": None, "url_1080p": None}
+    
+    first_word = words[0]
+    # Agar pehla lafz chota hai (jaise "The"), toh 2 lafz use karega
+    search_query = first_word if len(words) == 1 else f"{words[0]} {words[1]}"
+    
+    search_url = f"{BASE_DOMAIN}/search.php?keyword={urllib.parse.quote(search_query)}"
     print(f"Searching mp4moviez: {search_url}")
     await page.goto(search_url, timeout=60000)
-    
-    # [DEBUG EYES] Bot ko kya nazar aa raha hai?
-    page_title = await page.title()
-    print(f"[DEBUG] Page Title Seen By Bot: '{page_title}'")
-    
-    if "Just a moment" in page_title or "Cloudflare" in page_title:
-        print("[DEBUG WARNING] Cloudflare ne bot ko block kar ke challenge page dikha diya hai!")
     
     try:
         btn = page.locator("text=/(YES|AGREE|ACCEPT|ENTER|OK)/i").first
@@ -125,23 +127,20 @@ async def search_and_extract_mp4moviez(page, movie_title):
     try:
         links = await page.locator("a").all()
         target_movie_page = None
-        found_texts = []
         
         for link in links:
             text = await link.inner_text()
             href = await link.get_attribute("href")
             
-            if text and len(text.strip()) > 2:
-                found_texts.append(text.strip())
-            
-            # Match Logic Relax kar di gayi hai (Pehlay 4 letters)
-            if href and first_word.lower()[:4] in text.lower():
-                target_movie_page = href
+            # Yahan se "movie" wali pabandi hata di gayi hai.
+            # Ab sirf title match karega aur usko absolute URL banayega.
+            if href and text and first_word.lower() in text.lower():
+                # FIX 1: Relative link ko Mukammal link (Absolute URL) banana
+                target_movie_page = urllib.parse.urljoin(BASE_DOMAIN, href)
                 break
         
         if not target_movie_page:
-            print(f"[DEBUG] No match found. Bot saw these links on the page: {found_texts[:10]} ...")
-            print("Movie not found on mp4moviez.")
+            print(f"Movie '{movie_title}' not found on mp4moviez.")
             return movie_links
 
         print(f"Movie page found: {target_movie_page}. Extracting resolution links...")
@@ -152,7 +151,13 @@ async def search_and_extract_mp4moviez(page, movie_title):
             text = await link.inner_text()
             href = await link.get_attribute("href")
             
-            if not href or not href.endswith(".mp4") or "Jio Users Only" in text:
+            if not href or "Jio Users Only" in text:
+                continue
+                
+            # FIX 2: Download links ko bhi absolute URL banana
+            href = urllib.parse.urljoin(BASE_DOMAIN, href)
+            
+            if not href.lower().endswith(".mp4"):
                 continue
                 
             text = text.lower()
