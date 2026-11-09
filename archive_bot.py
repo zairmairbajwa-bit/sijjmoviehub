@@ -72,6 +72,7 @@ def upload_to_archive_and_sync(meta, video_paths):
     for res_label, vp in video_paths.items():
         if vp:
             ext = os.path.splitext(vp)[1].lower()
+            if ext not in [".mp4", ".mkv"]: ext = ".mp4"  # Default extension if redirected URL missed it
             cf = f"{clean_filename(meta['title'])}_{release_year}_{res_label}_{tmdb_id}{ext}"
             tp = os.path.join(os.path.dirname(vp), cf)
             os.rename(vp, tp)
@@ -108,7 +109,7 @@ def download_with_aria2(url, work_dir):
         subprocess.run(cmd, check=True, timeout=2400) 
         for root, dirs, files in os.walk(work_dir):
             for file in files:
-                if file.lower().endswith((".mp4", ".mkv", ".zip", ".rar")):
+                if not file.endswith(".aria2"):
                     return os.path.join(root, file)
     except:
         print(f"Aria2 download failed for {url}")
@@ -158,7 +159,7 @@ async def run_bot():
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
         2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
-        3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
+        3: "https://github.com/zairmairbajwa-bit8",
         4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
     }
     
@@ -204,7 +205,7 @@ async def run_bot():
                 print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                 continue
             
-            # === SIMPLE DIRECT LINK EXTRACTOR (FIXED CASE SENSITIVITY) ===
+            # === 100% FIXED DIRECT LINK EXTRACTOR ===
             movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
             all_links = await page.locator("a").all()
             
@@ -216,26 +217,22 @@ async def run_bot():
                     continue
                     
                 text_lower = text.lower() if text else ""
-                href_lower = href.lower()
                 
-                # Sirf "Jio Users" wale links ko skip karna hai
-                if "(for jio users only)" in text_lower or "jio users" in text_lower:
+                # Sirf "Jio Users" ya "Low Quality" (360p) wale links ko ignore karein
+                if "jio users" in text_lower or "low quality" in text_lower:
                     continue
                     
                 href_abs = urllib.parse.urljoin(BASE_DOMAIN, href)
                 
-                # FIX: Capital .Mp4 ya chota .mp4, dono ko pakdega
-                if href_lower.endswith((".mp4", ".mkv", ".zip", ".rar")):
+                # BARA FIX: Check karna hai ke naam (text) mein .mp4 likha hai ya nahi (link mein beshak na ho!)
+                if ".mp4" in text_lower or ".mkv" in text_lower:
                     
-                    if "1080p" in text_lower or "1080" in text_lower:
+                    if "1080p" in text_lower or "1080" in text_lower or "full hd" in text_lower:
                         if not movie_links["url_1080p"]: movie_links["url_1080p"] = href_abs
-                    elif "720p" in text_lower or "720" in text_lower:
+                    elif "720p" in text_lower or "720" in text_lower or "pc hd" in text_lower:
                         if not movie_links["url_720p"]: movie_links["url_720p"] = href_abs
                     elif "480p" in text_lower or "480" in text_lower:
                         if not movie_links["url_480p"]: movie_links["url_480p"] = href_abs
-                    else:
-                        # Agar resolution nahi likhi to usay 720p maan le
-                        if not movie_links["url_720p"]: movie_links["url_720p"] = href_abs
 
             if any(movie_links.values()):
                 wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
