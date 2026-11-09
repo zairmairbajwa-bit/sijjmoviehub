@@ -98,14 +98,6 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
-# Ad popups ko foran band karne ke liye
-async def handle_new_page(popup):
-    try:
-        await popup.close()
-        print("Blocked an Ad Popup!")
-    except:
-        pass
-
 async def get_paginated_movies(page, start_url):
     current_url = start_url
     all_movie_urls = []
@@ -148,7 +140,7 @@ async def run_bot():
     
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
-        2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
+        2: "url?id=28",
         3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
         4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
     }
@@ -167,7 +159,6 @@ async def run_bot():
         )
         
         page = await context.new_page()
-        page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
         await Stealth().apply_stealth_async(page)
         
         movie_pages = await get_paginated_movies(page, target_url)
@@ -196,63 +187,95 @@ async def run_bot():
                 print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                 continue
             
-            # === PLAYWRIGHT NATIVE CLICK & DOWNLOAD EXTRACTOR ===
+            # === LINK GRABBER ===
             all_links = await page.locator("a").all()
             target_link = None
+            target_link_href = None
             res_label = None
             
             for link in all_links:
                 try:
                     text = await link.inner_text()
+                    href = await link.get_attribute("href")
                 except:
                     continue
                     
-                text_lower = text.lower() if text else ""
-                href = await link.get_attribute("href")
-                
                 if not href or href == "#": 
                     continue
                 
-                # Kachra links ko skip karna
+                text_lower = text.lower() if text else ""
+                
                 if "jio users" in text_lower or "low quality" in text_lower:
                     continue
                     
-                # FIX: Ab sirf .mp4 par depend nahi karega. Koi bhi resolution likhi ho, usay utha lega!
                 if any(res in text_lower for res in ['.mp4', '.mkv', '1080', '720', '480', 'pc hd']):
-                    
-                    # Generic website buttons ko avoid karein
                     if any(nav in text_lower for nav in ['home', 'category', 'disclaimer', 'contact']):
                         continue
                         
+                    href_abs = urllib.parse.urljoin(BASE_DOMAIN, href)
+                        
                     if "1080" in text_lower or "full hd" in text_lower:
                         target_link = link
+                        target_link_href = href_abs
                         res_label = "url_1080p"
-                        break # Best quality mil gayi, loop tor do
+                        break
                     elif "720" in text_lower or "pc hd" in text_lower:
                         if res_label != "url_1080p":
                             target_link = link
+                            target_link_href = href_abs
                             res_label = "url_720p"
                     elif "480" in text_lower:
                         if not res_label:
                             target_link = link
+                            target_link_href = href_abs
                             res_label = "url_480p"
 
             if not target_link:
-                print("No suitable download button found on this page.")
+                print("No suitable download link found on this page.")
                 continue
                 
-            print(f"Clicking download button for {res_label}...")
             wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
+            download = None
 
+            # --- POPUP TRACKING SYSTEM ---
+            popups = []
+            def handle_popup(popup):
+                popups.append(popup)
+            page.on("popup", handle_popup)
+            
+            # --- COMBO DOWNLOADER (CLICK -> GOTO) ---
             try:
-                async with page.expect_download(timeout=120000) as download_info:
+                print(f"Method 1: Clicking download button for {res_label}...")
+                async with page.expect_download(timeout=60000) as download_info:
                     await target_link.click(force=True)
-                
                 download = await download_info.value
+                print("Download triggered via Click!")
+            except Exception as e:
+                print(f"Click failed or timed out: {e}. Trying Method 2 (Goto)...")
+                try:
+                    if target_link_href:
+                        async with page.expect_download(timeout=60000) as download_info:
+                            await page.goto(target_link_href)
+                        download = await download_info.value
+                        print("Download triggered via Goto!")
+                except Exception as e2:
+                    print(f"Goto also failed: {e2}")
+
+            # JAISE HI DOWNLOAD START HUI, POPUPS KO KILL KAR DO
+            for p in popups:
+                try:
+                    await p.close()
+                    print("Closed an ad popup successfully.")
+                except:
+                    pass
+                    
+            page.remove_listener("popup", handle_popup)
+
+            # --- SAVE THE FILE ---
+            if download:
                 file_name = download.suggested_filename
-                
                 if file_name.lower().endswith(".html"):
                     print("Blocked an HTML file download!")
                 else:
@@ -261,9 +284,6 @@ async def run_bot():
                     await download.save_as(file_path)
                     print(f"Download complete: {file_path}")
                     downloaded_paths[res_label] = file_path
-                    
-            except Exception as e:
-                print(f"Playwright download failed or timed out: {e}")
 
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
