@@ -139,21 +139,13 @@ async def get_year_folders(page, category_url):
             if abs_url not in year_folders:
                 year_folders.append(abs_url)
                 
-    year_folders = sorted(year_folders, reverse=True) # Newest year first (2026...)
+    year_folders = sorted(year_folders, reverse=True)
     return year_folders
 
 async def get_paginated_movies(page, year_url):
-    """Year folder ke saare pages scan kar ke sirf ASALI movies nikalna (Menu/Category ignore)"""
+    """Year folder ke saare pages scan kar ke sirf ASALI movies nikalna (Index/Category pages ignore)"""
     current_url = year_url
     all_movie_urls = []
-    
-    # Menu aur Category wale kachra words ki strict blacklist
-    bad_keywords = [
-        'category', 'movies.html', 'series.html', 'tagalog', 'bhojpuri', 
-        'gujarati', 'marathi', 'wwe', 'south-indian', 'punjabi-movies', 
-        'bollywood-movies', 'hollywood-movies', 'tv-series', 'web-series',
-        'bengali', 'pakistani', 'telugu', 'tamil'
-    ]
     
     while current_url:
         print(f"Scanning Year Page: {current_url}")
@@ -169,20 +161,24 @@ async def get_paginated_movies(page, year_url):
             
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                filename = abs_url.split('/')[-1].lower()
+                path_lower = abs_url.lower()
                 
-                # Check agar yeh koi category ya menu link hai
-                is_category = any(bad in filename for bad in bad_keywords)
+                # SMART FILTER: Category ya Year-Index pages ko block karna (jo 'latest-' se shuru hon ya '-movies' rakhte hon)
+                is_index_page = False
+                if "/category/" in path_lower:
+                    is_index_page = True
+                elif "latest-" in path_lower and "movies" in path_lower and "episode" not in path_lower and "season" not in path_lower:
+                    is_index_page = True
                 
-                # Sirf wohi link jo Asali Movie ka ho (ID folder ho + .html ho + category na ho)
-                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_category:
+                # Sirf wohi link uthayega jo Asali Movie/Series post ka ho
+                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_index_page:
                     if abs_url not in all_movie_urls and abs_url not in page_movies:
                         page_movies.append(abs_url)
                 
                 # Next page link check
                 text_lower = text.lower() if text else ""
                 if "next" in text_lower or ">" in text_lower or ">>" in text_lower:
-                    if not next_page_url and ("category" in abs_url or "page" in abs_url):
+                    if not next_page_url and ("category" in abs_url or "page" in abs_url or "index" in abs_url):
                         next_page_url = abs_url
 
         all_movie_urls.extend(page_movies)
@@ -195,7 +191,7 @@ async def get_paginated_movies(page, year_url):
     return all_movie_urls
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Strict Filter Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Smart Filter Bot ID: {BOT_ID}")
     
     TARGET_CATEGORIES = {
         1: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
