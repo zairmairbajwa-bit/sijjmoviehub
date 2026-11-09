@@ -38,8 +38,21 @@ def is_already_in_firebase(tmdb_id):
     return False
 
 def search_tmdb_from_title(raw_title):
-    clean = re.sub(r'\(.*?\)|\[.*?\]', '', raw_title)
-    clean = re.sub(r'(?i)(hindi dubbed|full movie|download|mp4moviez|hdrip|bluray|web-dl|1080p|720p|480p|movies|series|season|episode|ep).*', '', clean)
+    # FIXED TMDB SEARCH LOGIC
+    clean = raw_title
+    
+    # 1. Sirf 'Download' ya 'Mp4moviez' jaisay lafz hataye ga bina baqi naam delete kiye
+    clean = re.sub(r'(?i)\bDownload\b', '', clean)
+    clean = re.sub(r'(?i)in HD Mp4moviez', '', clean)
+    clean = re.sub(r'(?i)Mp4moviez', '', clean)
+    
+    # 2. 'Hindi Dubbed' ya uske baad ka sab kuch delete karega (kyunke asal naam pehle hota hai)
+    clean = re.sub(r'(?i)(hindi dubbed|full movie|hdrip|bluray|web-dl|1080p|720p|480p).*', '', clean)
+    
+    # 3. Saal (2026) waghera ko hatayega
+    clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
+    clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
+    
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
@@ -148,7 +161,6 @@ async def get_paginated_movies(page, start_url):
         print(f"Total links gathered so far: {len(all_movie_urls)}")
         break # Abhi ke liye 1 page run kar rahe hain
             
-    # Clean and filter real movie links (exclude main year page itself)
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
