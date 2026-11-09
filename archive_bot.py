@@ -7,7 +7,6 @@ import urllib.parse
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth 
 import requests
-import subprocess
 import internetarchive as ia
 import shutil
 
@@ -31,7 +30,7 @@ def is_already_in_firebase(tmdb_id):
         res = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=10)
         if res.status_code == 200 and res.json():
             data = res.json()
-            if data.get("url_720p") and data.get("url_480p"):
+            if data.get("url_720p") and data.get("url_480p") and data.get("url_1080p"):
                 return True
     except:
         pass
@@ -99,25 +98,11 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
-def download_with_aria2(url, work_dir):
-    print(f"Downloading: {url}")
-    cmd = [
-        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
-        "--content-disposition-default-utf8=true", url
-    ]
-    try:
-        subprocess.run(cmd, check=True, timeout=2400) 
-        for root, dirs, files in os.walk(work_dir):
-            for file in files:
-                if not file.endswith(".aria2"):
-                    return os.path.join(root, file)
-    except:
-        print(f"Aria2 download failed for {url}")
-    return None
-
+# Ad popups ko foran band karne ke liye
 async def handle_new_page(popup):
     try:
         await popup.close()
+        print("Blocked an Ad Popup!")
     except:
         pass
 
@@ -137,10 +122,15 @@ async def get_paginated_movies(page, start_url):
         page_movies = []
         
         for link in links:
-            href = await link.get_attribute("href")
+            try:
+                href = await link.get_attribute("href")
+            except:
+                continue
+                
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 path_lower = abs_url.lower()
+                
                 if abs_url.endswith(".html") and re.search(r'/[a-z0-9]+/[^/]+\.html$', abs_url, re.IGNORECASE):
                     if not any(skip in path_lower for skip in ['category', 'disclaimer', 'report', 'index', 'home', 'contact']):
                         if abs_url not in all_movie_urls and abs_url not in page_movies:
@@ -156,12 +146,12 @@ async def get_paginated_movies(page, start_url):
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
     
-    # FIXED: Bot 3 ko uska original 2024 ka link wapis de diya gaya hai!
+    # Absolute Direct URLs taake koi ghalti na ho
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
         2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
-        3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
-        4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
+        3: "https://www.mp4moviez.computer/0289/latest-hollywood-hindi-dubbed-movies-(2024).html",
+        4: "https://www.mp4moviez.computer/0235/latest-hollywood-hindi-dubbed-movies-(2023).html"
     }
     
     target_url = BOT_DIRECT_URLS.get(BOT_ID, BOT_DIRECT_URLS[1])
@@ -171,8 +161,10 @@ async def run_bot():
     start_time = time.time()
     
     async with async_playwright() as p:
+        # User Agent zaroori hai taake website bot samajh kar block na kare
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
         context = await browser.new_context(
+            accept_downloads=True,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
@@ -206,72 +198,81 @@ async def run_bot():
                 print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                 continue
             
-            # === SUPER RELAXED DIRECT LINK EXTRACTOR ===
-            movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
+            # === PLAYWRIGHT NATIVE CLICK & DOWNLOAD EXTRACTOR ===
             all_links = await page.locator("a").all()
+            target_link = None
+            res_label = None
             
             for link in all_links:
-                text = await link.inner_text()
-                href = await link.get_attribute("href")
-                
-                if not href: continue
+                try:
+                    text = await link.inner_text()
+                except:
+                    continue
                     
                 text_lower = text.lower() if text else ""
-                href_lower = href.lower()
-                href_abs = urllib.parse.urljoin(BASE_DOMAIN, href)
                 
-                # Sirf "Jio Users" ya "Low Quality" wale links skip hongay
+                # Kachra links ko skip karna
                 if "jio users" in text_lower or "low quality" in text_lower:
                     continue
                     
-                # Ab bot sirf ".mp4" par depend nahi karega! 
-                # Agar text mein '1080p', '720p', '480p' ho, YA link mein 'dl.php' ho toh pakar lega.
-                is_movie_link = False
-                if ".mp4" in text_lower or ".mkv" in text_lower or "720p" in text_lower or "480p" in text_lower or "1080p" in text_lower or "hd" in text_lower:
-                    is_movie_link = True
-                elif "dl.php" in href_lower or "/file/" in href_lower:
-                    is_movie_link = True
+                # Sirf us button ko pakarna jis par .mp4 ya .mkv likha ho
+                if ".mp4" in text_lower or ".mkv" in text_lower:
+                    if "1080p" in text_lower or "1080" in text_lower or "full hd" in text_lower:
+                        target_link = link
+                        res_label = "url_1080p"
+                        break # Best quality mil gayi, loop tor do
+                    elif "720p" in text_lower or "720" in text_lower or "pc hd" in text_lower:
+                        if res_label != "url_1080p":
+                            target_link = link
+                            res_label = "url_720p"
+                    elif "480p" in text_lower or "480" in text_lower:
+                        if not res_label:
+                            target_link = link
+                            res_label = "url_480p"
+
+            if not target_link:
+                print("No suitable download button found on this page.")
+                continue
+                
+            print(f"Clicking download button for {res_label}...")
+            wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
+            os.makedirs(wd, exist_ok=True)
+            downloaded_paths = {}
+
+            try:
+                # Bot button par click karega aur download shuru hone ka intezar karega
+                async with page.expect_download(timeout=120000) as download_info:
+                    await target_link.click(force=True)
+                
+                download = await download_info.value
+                file_name = download.suggested_filename
+                
+                # Check agar ghalti se .html download ho rahi hai toh usay save hi mat karo
+                if file_name.lower().endswith(".html"):
+                    print("Blocked an HTML file download!")
+                else:
+                    file_path = os.path.join(wd, file_name)
+                    print(f"Downloading file: {file_name}...")
+                    await download.save_as(file_path)
+                    print(f"Download complete: {file_path}")
+                    downloaded_paths[res_label] = file_path
                     
-                # Fazool menu buttons ko skip karne ki shart
-                if any(x in text_lower for x in ['home', 'category', 'disclaimer', 'report', 'app']):
-                    is_movie_link = False
+            except Exception as e:
+                print(f"Playwright download failed or timed out: {e}")
 
-                if is_movie_link:
-                    if "1080" in text_lower or "full hd" in text_lower:
-                        if not movie_links["url_1080p"]: movie_links["url_1080p"] = href_abs
-                    elif "720" in text_lower or "pc hd" in text_lower:
-                        if not movie_links["url_720p"]: movie_links["url_720p"] = href_abs
-                    elif "480" in text_lower:
-                        if not movie_links["url_480p"]: movie_links["url_480p"] = href_abs
-                    else:
-                        # By default best available (720p) assign karega
-                        if not movie_links["url_720p"]: movie_links["url_720p"] = href_abs
-
-            if any(movie_links.values()):
-                wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
-                os.makedirs(wd, exist_ok=True)
-                
-                downloaded_paths = {}
-                for res_label, dl_link in movie_links.items():
-                    if dl_link:
-                        path = download_with_aria2(dl_link, wd)
-                        if path: downloaded_paths[res_label] = path
-                
-                if any(downloaded_paths.values()):
-                    title = tmdb_data.get("title", "Untitled")
-                    meta = {
-                        "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
-                        "overview": tmdb_data.get("overview", ""), "release_date": tmdb_data.get("release_date", ""), 
-                        "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
-                        "hindi_dubbed": True 
-                    }
-                    if upload_to_archive_and_sync(meta, downloaded_paths):
-                        completed += 1
-                        print(f"Successfully synced {title} with multiple resolutions!")
-                        
-                shutil.rmtree(wd, ignore_errors=True)
-            else:
-                print("No suitable download links found on this page.")
+            if any(downloaded_paths.values()):
+                title = tmdb_data.get("title", "Untitled")
+                meta = {
+                    "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
+                    "overview": tmdb_data.get("overview", ""), "release_date": tmdb_data.get("release_date", ""), 
+                    "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
+                    "hindi_dubbed": True 
+                }
+                if upload_to_archive_and_sync(meta, downloaded_paths):
+                    completed += 1
+                    print(f"Successfully synced {title}!")
+                    
+            shutil.rmtree(wd, ignore_errors=True)
                 
         await browser.close()
     print("Bot run completed.")
