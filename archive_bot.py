@@ -7,6 +7,7 @@ import urllib.parse
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth 
 import requests
+import subprocess
 import internetarchive as ia
 import shutil
 
@@ -98,6 +99,28 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
+# FALLBACK METHOD 2: Aria2c Downloader (Zabardasti Download karega)
+def download_with_aria2(url, work_dir, referer_url):
+    print(f"Starting Aria2c Fast Download: {url}")
+    cmd = [
+        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
+        "--content-disposition-default-utf8=true",
+        f"--referer={referer_url}",
+        "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        url
+    ]
+    try:
+        subprocess.run(cmd, check=True, timeout=2400) 
+        for root, dirs, files in os.walk(work_dir):
+            for file in files:
+                if file.lower().endswith((".mp4", ".mkv")):
+                    return os.path.join(root, file)
+                elif not file.endswith(".aria2") and not file.lower().endswith(".html"):
+                    return os.path.join(root, file)
+    except Exception as e:
+        print(f"Aria2 download failed: {e}")
+    return None
+
 async def get_paginated_movies(page, start_url):
     current_url = start_url
     all_movie_urls = []
@@ -138,7 +161,6 @@ async def get_paginated_movies(page, start_url):
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
     
-    # SAB BOTS KE URLS 100% FIXED
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
         2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
@@ -237,50 +259,56 @@ async def run_bot():
             wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
-            download = None
 
+            # Popups handler
             popups = []
             def handle_popup(popup):
                 popups.append(popup)
             page.on("popup", handle_popup)
             
+            # --- METHOD 1: Playwright Click (Wait 60s) ---
+            method_1_success = False
             try:
                 print(f"Method 1: Clicking download button for {res_label}...")
-                async with page.expect_download(timeout=120000) as download_info:
+                async with page.expect_download(timeout=60000) as download_info:
                     await target_link.click(force=True)
                 download = await download_info.value
                 print("Download triggered via Click!")
-            except Exception as e:
-                print(f"Click failed or timed out: {e}. Trying Method 2 (Goto)...")
-                try:
-                    if target_link_href:
-                        async with page.expect_download(timeout=120000) as download_info:
-                            await page.goto(target_link_href)
-                        download = await download_info.value
-                        print("Download triggered via Goto!")
-                except Exception as e2:
-                    print(f"Goto also failed: {e2}")
-
-            for p in popups:
-                try:
-                    await p.close()
-                    print("Closed an ad popup successfully.")
-                except:
-                    pass
-                    
-            page.remove_listener("popup", handle_popup)
-
-            if download:
+                
                 file_name = download.suggested_filename
                 if file_name.lower().endswith(".html"):
-                    print("Blocked an HTML file download!")
+                    print("Blocked an HTML file download in Method 1!")
                 else:
                     file_path = os.path.join(wd, file_name)
                     print(f"Downloading file: {file_name}...")
                     await download.save_as(file_path)
                     print(f"Download complete: {file_path}")
                     downloaded_paths[res_label] = file_path
+                    method_1_success = True
+                    
+            except Exception as e:
+                print(f"Method 1 Timeout: Browser might be playing video natively instead of downloading. Shifting to Method 2 (Aria2c)...")
 
+            # --- METHOD 2: Aria2c Fallback (Force Download) ---
+            if not method_1_success:
+                print("Trying Method 2 (Aria2c Direct Fetch)...")
+                if target_link_href:
+                    path = download_with_aria2(target_link_href, wd, m_url)
+                    if path:
+                        downloaded_paths[res_label] = path
+                        print(f"Download complete via Aria2c: {path}")
+                else:
+                    print("Target link missing for Method 2.")
+
+            # Close any popups generated
+            for p in popups:
+                try:
+                    await p.close()
+                except:
+                    pass
+            page.remove_listener("popup", handle_popup)
+
+            # Sync to Archive/Firebase
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
                 meta = {
