@@ -11,9 +11,9 @@ import subprocess
 import internetarchive as ia
 import shutil
 
-# === APKI API KEYS ===
-TMDB_API_KEY = "7b6a89d3dc55b3a81aa892a88c0da6b9"
-FIREBASE_URL = "https://sijjmoviehub-default-rtdb.firebaseio.com"
+# === SECURE CREDENTIALS (Environment Variables Preferred) ===
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
+FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.firebaseio.com")
 BASE_DOMAIN = "https://mp4moviez.computer"
 
 # === BOT SETTINGS ===
@@ -110,7 +110,6 @@ def download_with_aria2(url, work_dir):
 
 async def handle_new_page(popup):
     try:
-        print(f"Blocked pop-up ad tab.")
         await popup.close()
     except:
         pass
@@ -136,8 +135,8 @@ async def get_year_folders(page, category_url):
         
         if href and text:
             text_clean = text.strip()
-            # STRICT CHECK: Link ka text ya URL sirf saal hona chahiye (jaise '2026' ya 'Movies 2025') aur menu categories nahi honi chahiye
-            if re.search(r'\b(2026|2025|2024|2023)\b', text_clean) and not any(m in text_clean.lower() for m in ['bollywood', 'hollywood', 'south', 'punjabi', 'bhojpuri']):
+            # STRICT FILTER: Only grab numerical years or specific folder patterns, ignoring category menus
+            if re.search(r'\b(2026|2025|2024|2023|2022|2021)\b', text_clean) and not any(m in text_clean.lower() for m in ['bollywood', 'hollywood', 'south', 'punjabi', 'bhojpuri', 'marathi', 'tamil', 'telugu']):
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 if abs_url not in year_folders and abs_url != category_url:
                     year_folders.append(abs_url)
@@ -167,21 +166,23 @@ async def get_paginated_movies(page, year_url):
                 path_lower = abs_url.lower()
                 filename = path_lower.split('/')[-1]
                 
-                is_index_page = False
+                # STRICT IGNORE FOR CATEGORY / GENRE INDEX PAGES
+                is_category_link = False
                 if "/category/" in path_lower:
-                    is_index_page = True
-                elif filename.startswith("latest-") and any(w in filename for w in ['movies', 'series', 'dubbed', 'tv-series', 'bengali', 'bollywood', 'hollywood', 'punjabi', 'south']):
-                    is_index_page = True
-                elif any(bad in filename for bad in ['tagalog', 'bhojpuri', 'gujarati', 'marathi', 'wwe', 'south-indian']):
-                    is_index_page = True
+                    is_category_link = True
+                elif filename.startswith("latest-") or filename.endswith("-movies.html") or filename.endswith("-series.html"):
+                    is_category_link = True
+                elif any(bad in filename for bad in ['tagalog', 'bhojpuri', 'gujarati', 'marathi', 'wwe', 'short-films', 'web-series']):
+                    is_category_link = True
                 
-                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_index_page:
+                # Match only individual movie detail paths (e.g. /123/movie-name.html)
+                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_category_link:
                     if abs_url not in all_movie_urls and abs_url not in page_movies:
                         page_movies.append(abs_url)
                 
                 text_lower = text.lower() if text else ""
                 if "next" in text_lower or ">" in text_lower or ">>" in text_lower:
-                    if not next_page_url and ("category" in abs_url or "page" in abs_url or "index" in abs_url):
+                    if not next_page_url and ("page" in abs_url or "index" in abs_url or "dir" in abs_url):
                         next_page_url = abs_url
 
         all_movie_urls.extend(page_movies)
@@ -191,16 +192,16 @@ async def get_paginated_movies(page, year_url):
         else:
             break
             
-    return all_movie_urls
+    return list(set(all_movie_urls))
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Menu-Ignored Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Fixed Scraper Bot ID: {BOT_ID}")
     
     TARGET_CATEGORIES = {
         1: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
         2: "https://mp4moviez.computer/category/latest-bollywood-movies.html",
         3: "https://mp4moviez.computer/category/punjabi-movies.html",
-        4: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html"
+        4: "https://mp4moviez.computer/category/south-indian-hindi-dubbed-movies.html"
     }
     
     my_category = TARGET_CATEGORIES.get(BOT_ID, TARGET_CATEGORIES[1])
@@ -232,7 +233,10 @@ async def run_bot():
                 if (time.time() - start_time) > 20000: break 
 
                 print(f"\n--- Opening Movie Page: {m_url} ---")
-                await page.goto(m_url, timeout=60000)
+                try:
+                    await page.goto(m_url, timeout=60000)
+                except:
+                    continue
                 
                 raw_title = await page.title()
                 
@@ -258,7 +262,8 @@ async def run_bot():
                         
                     text_lower = text.lower() if text else ""
                     
-                    if "jio users only" in text_lower or "pc users" in text_lower:
+                    # STRICT SKIP FOR JIO USERS / PC ONLY / LOW QUALITY
+                    if any(bad_kw in text_lower for bad_kw in ["jio users", "pc users", "low quality", "server 2"]):
                         continue
                         
                     href = urllib.parse.urljoin(BASE_DOMAIN, href)
