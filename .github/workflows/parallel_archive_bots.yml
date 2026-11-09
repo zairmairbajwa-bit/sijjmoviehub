@@ -1,4 +1,4 @@
-name: SijjMoviesHub Hybrid Auto-Scraper
+name: SijjMoviesHub Mp4moviez Scraper
 
 on:
   workflow_dispatch: 
@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bot_id: [1, 2, 3, 4, 5, 6, 7, 8] 
+        bot_id: [1, 2, 3, 4] # Pehle 4 bots test karenge
 
     steps:
       - name: Checkout Repository
@@ -26,15 +26,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          playwright install chromium
           sudo apt-get update
-          # aria2 torrents aur direct downloads dono ke liye best aur fast hai
-          sudo apt-get install -y aria2 ffmpeg
+          sudo apt-get install -y aria2
 
-      - name: Run Hybrid Scraper Bot
-        run: python archive_bot.py
+      - name: Run Playwright Bot
+        run: python mp4moviez_bot.py
         env:
           BOT_ID: ${{ matrix.bot_id }}
-          YEAR_START: "2025"
-          YEAR_END: "2026"
           IA_ACCESS: ${{ secrets.IA_ACCESS }}
           IA_SECRET: ${{ secrets.IA_SECRET }}
