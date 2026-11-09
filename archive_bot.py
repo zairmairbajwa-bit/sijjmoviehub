@@ -140,22 +140,21 @@ async def get_paginated_movies(page, start_url):
                 path_lower = abs_url.lower()
                 text_lower = text.lower() if text else ""
                 
-                # STRICT MOVIE CHECK: Movie detail page format (/digits/moviename.html)
-                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
-                    if "/category/" not in path_lower and not any(skip in path_lower for skip in ['latest-', '-movies.html', '-series.html', 'tagalog', 'bhojpuri', 'short-films', 'wwe']):
+                # FIXED MOVIE CHECK: Accept any valid .html movie page that is not category, home, or disclaimer
+                if abs_url.endswith(".html") and not any(skip in path_lower for skip in ['category', 'disclaimer', 'report', 'index', 'home']):
+                    # Must contain a number/id in path or movie filename structure
+                    if re.search(r'/\d+/', abs_url):
                         if abs_url not in all_movie_urls and abs_url not in page_movies:
                             page_movies.append(abs_url)
                 
-                # Pagination detection (Next / >> or numeric page links)
+                # Pagination detection for multi-pages (Next / numbers)
                 if "next" in text_lower or ">>" in text_lower or text.strip().isdigit():
                     if abs_url != current_url and abs_url not in all_movie_urls:
-                        # Agar pagination link hai toh collect kar lo
                         if "page" in abs_url or re.search(r'/\d+/', abs_url):
                             if not next_page_url and text.strip().isdigit():
-                                # Prefer numeric sequence pagination
-                                pass
+                                next_page_url = abs_url
 
-        # Check footer numeric pagination buttons explicitly
+        # Check footer numeric pagination buttons
         try:
             for link in links:
                 pl_text = await link.inner_text()
@@ -170,21 +169,20 @@ async def get_paginated_movies(page, start_url):
         all_movie_urls.extend(page_movies)
         print(f"Total links gathered so far: {len(all_movie_urls)}")
         
-        break  # Single page ya direct scan complete karne ke liye
+        break  # Scan current page list
             
-    # Filter out only valid movie detail URLs
-    real_movies = [u for u in all_movie_urls if re.search(r'/\d+/[^/]+\.html$', u) and not any(x in u for x in ['latest-', 'category', 'index'])]
+    # Filter valid movie URLs
+    real_movies = [u for u in all_movie_urls if abs_url.endswith(".html") and not any(x in u for x in ['category', 'disclaimer', 'report'])]
     return list(set(real_movies))
 
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
     
-    # Har Bot ke liye ab ABSOLUTE URLs set kar diye gaye hain taake link load hone mein koi ghalti na ho
     BOT_DIRECT_URLS = {
-        1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html", # Bot 1 -> 2026
-        2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html", # Bot 2 -> 2025
-        3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html", # Bot 3 -> 2024
-        4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"  # Bot 4 -> 2023
+        1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
+        2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
+        3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
+        4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
     }
     
     target_url = BOT_DIRECT_URLS.get(BOT_ID, BOT_DIRECT_URLS[1])
@@ -249,7 +247,7 @@ async def run_bot():
                 if not href.lower().endswith((".mp4", ".mkv", ".zip", ".rar")):
                     continue
                     
-                # Capture all 3 resolutions: 480p, 720p, 1080p / Full HD
+                # Capture all 3 resolutions
                 if "480p" in text_lower and not movie_links["url_480p"]: 
                     movie_links["url_480p"] = href
                 elif "720p" in text_lower and not movie_links["url_720p"]: 
