@@ -5,8 +5,7 @@ import asyncio
 import re
 import urllib.parse
 from playwright.async_api import async_playwright
-# Yahan import theek kar diya gaya hai
-from playwright_stealth import stealth 
+from playwright_stealth import Stealth  # Import fixed here
 import requests
 import subprocess
 import internetarchive as ia
@@ -24,7 +23,7 @@ IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
 
 MAX_MOVIES_PER_RUN = 3
-MIN_FILE_SIZE = 150 * 1024 * 1024  # 150 MB Minimum
+MIN_FILE_SIZE = 150 * 1024 * 1024  # 150 MB Minimum (Kachra files ignore karne ke liye)
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -34,6 +33,7 @@ def is_already_in_firebase(tmdb_id):
         res = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=10)
         if res.status_code == 200 and res.json():
             data = res.json()
+            # Agar 720p ya purana stream_url mojood hai toh skip karega
             if "archive.org/download/" in data.get("url_720p", "") or "archive.org/download/" in data.get("stream_url", ""):
                 return True
     except:
@@ -71,6 +71,7 @@ def upload_to_archive_and_sync(meta, video_paths):
     
     if r and r[0].status_code == 200:
         meta.update(firebase_links)
+        # Default stream_url VIP quality ko set karna
         meta["stream_url"] = firebase_links.get("url_720p") or firebase_links.get("url_480p") or firebase_links.get("url_1080p")
         meta["category"] = "Popular Updates"
         requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
@@ -121,6 +122,7 @@ async def search_and_extract_mp4moviez(page, movie_title):
             text = await link.inner_text()
             href = await link.get_attribute("href")
             
+            # Movie ka apna page dhoondna
             if href and "movie" in href and movie_title.lower()[:5] in text.lower():
                 target_movie_page = href
                 break
@@ -137,6 +139,7 @@ async def search_and_extract_mp4moviez(page, movie_title):
             text = await link.inner_text()
             href = await link.get_attribute("href")
             
+            # Galat links aur Jio users wale links ignore karna
             if not href or not href.endswith(".mp4") or "Jio Users Only" in text:
                 continue
                 
@@ -165,11 +168,13 @@ async def run_bot():
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
+        # Naye tabs (Ads) kill karne ka listener
         context.on("page", lambda page: asyncio.create_task(handle_new_page(page)))
         
         page = await context.new_page()
-        # Yahan call theek kar di gayi hai
-        await stealth(page)
+        
+        # Cloudflare Bypass Stealth Apply karna (Fix applied here)
+        await Stealth().apply_stealth_async(page)
         
         for p_num in range(BOT_ID, 50, 8):
             if completed >= MAX_MOVIES_PER_RUN: break
