@@ -99,12 +99,8 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
-# FALLBACK METHOD 2: Aria2c Downloader
+# FAST DOWNLOADER (Aria2c)
 def download_with_aria2(url, work_dir, referer_url):
-    if url.lower().endswith(".html"):
-        print(f"Skipping Aria2c: URL is an HTML page, not a direct media link ({url})")
-        return None
-        
     print(f"Starting Aria2c Fast Download: {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
@@ -216,7 +212,6 @@ async def run_bot():
             
             all_links = await page.locator("a").all()
             target_link = None
-            target_link_href = None
             res_label = None
             
             for link in all_links:
@@ -238,22 +233,17 @@ async def run_bot():
                     if any(nav in text_lower for nav in ['home', 'category', 'disclaimer', 'contact']):
                         continue
                         
-                    href_abs = urllib.parse.urljoin(BASE_DOMAIN, href)
-                        
                     if "1080" in text_lower or "full hd" in text_lower:
                         target_link = link
-                        target_link_href = href_abs
                         res_label = "url_1080p"
                         break
                     elif "720" in text_lower or "pc hd" in text_lower:
                         if res_label != "url_1080p":
                             target_link = link
-                            target_link_href = href_abs
                             res_label = "url_720p"
                     elif "480" in text_lower:
                         if not res_label:
                             target_link = link
-                            target_link_href = href_abs
                             res_label = "url_480p"
 
             if not target_link:
@@ -264,56 +254,61 @@ async def run_bot():
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
-            popups = []
-            def handle_popup(popup):
-                popups.append(popup)
-            page.on("popup", handle_popup)
+            # ==========================================
+            # 🕵️ THE NETWORK SNIFFER (JASOOS) LOGIC
+            # ==========================================
+            stolen_media_url = None
             
-            # --- YAHAN FIX KIYA HAI: page.expect_download wapis lagaya ---
-            method_1_success = False
+            def sniff_network(request):
+                nonlocal stolen_media_url
+                url = request.url
+                # Check agar background mein mp4 ya mkv link call ho raha hai
+                if ('.mp4' in url.lower() or '.mkv' in url.lower()) and not stolen_media_url:
+                    stolen_media_url = url
+                    print(f"🕵️ [SNIFFER] Asli media link chura liya: {url}")
+
+            # Poore browser context par jasoos bitha diya (Taa ke popups se bhi link pakar sakay)
+            context.on("request", sniff_network)
+            
+            # Popups ko track aur kill karne ke liye
+            popups = []
+            def handle_new_tab(new_page):
+                popups.append(new_page)
+            context.on("page", handle_new_tab)
+
+            print(f"Clicking button for {res_label} and waiting for Sniffer to catch the link...")
             try:
-                print(f"Method 1: Clicking download button for {res_label}...")
+                # Sirf click karega, download ka wait nahi karega
+                await target_link.click(force=True)
                 
-                async with page.expect_download(timeout=90000) as download_info:
-                    await target_link.click(force=True)
-                    
-                download = await download_info.value
-                print("Download triggered via Click!")
-                
-                file_name = download.suggested_filename
-                if file_name.lower().endswith(".html"):
-                    print("Blocked an HTML file download in Method 1!")
-                else:
-                    file_path = os.path.join(wd, file_name)
-                    print(f"Downloading file: {file_name}...")
-                    await download.save_as(file_path)
-                    print(f"Download complete: {file_path}")
-                    downloaded_paths[res_label] = file_path
-                    method_1_success = True
+                # Maximum 20 seconds tak background requests ka wait karega
+                for _ in range(20):
+                    if stolen_media_url:
+                        break
+                    await asyncio.sleep(1)
                     
             except Exception as e:
-                print(f"Method 1 Timeout or Failed: {e}. Moving to Method 2...")
+                print(f"Error clicking link: {e}")
 
-            # --- METHOD 2: Aria2c Fallback ---
-            if not method_1_success:
-                print("Trying Method 2 (Aria2c Direct Fetch)...")
-                if target_link_href:
-                    path = download_with_aria2(target_link_href, wd, m_url)
-                    if path:
-                        downloaded_paths[res_label] = path
-                        print(f"Download complete via Aria2c: {path}")
-                else:
-                    print("Target link missing for Method 2.")
-
-            # Close any popups generated
+            # Safai - Jasoos hata do aur kachra tabs band kar do
+            context.remove_listener("request", sniff_network)
+            context.remove_listener("page", handle_new_tab)
             for p in popups:
-                try:
-                    await p.close()
-                except:
-                    pass
-            page.remove_listener("popup", handle_popup)
+                try: await p.close()
+                except: pass
 
-            # Sync to Archive/Firebase
+            # ==========================================
+            # 🚀 DIRECT DOWNLOADING VIA ARIA2C
+            # ==========================================
+            if stolen_media_url:
+                print(f"🎯 Sniffer Success! Handing over pure link to Aria2c...")
+                path = download_with_aria2(stolen_media_url, wd, m_url)
+                if path:
+                    downloaded_paths[res_label] = path
+                    print(f"Download complete via Aria2c: {path}")
+            else:
+                print("❌ Sniffer failed to catch the media link. Website might be using a completely hidden blob or different format.")
+
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
                 meta = {
