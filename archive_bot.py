@@ -11,7 +11,7 @@ import subprocess
 import internetarchive as ia
 import shutil
 
-# === SECURE CREDENTIALS (Environment Variables Preferred) ===
+# === SECURE CREDENTIALS ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
 FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.firebaseio.com")
 BASE_DOMAIN = "https://mp4moviez.computer"
@@ -114,8 +114,8 @@ async def handle_new_page(popup):
     except:
         pass
 
-async def get_year_folders(page, category_url):
-    print(f"Scanning Category for Year Folders: {category_url}")
+async def get_target_year_folder(page, category_url, target_year):
+    print(f"Scanning Category to find Year '{target_year}' folder: {category_url}")
     await page.goto(category_url, timeout=60000)
     
     try:
@@ -127,30 +127,28 @@ async def get_year_folders(page, category_url):
         pass 
         
     links = await page.locator("a").all()
-    year_folders = []
+    target_url = None
     
     for link in links:
         text = await link.inner_text()
         href = await link.get_attribute("href")
         
         if href and text:
-            text_clean = text.strip().lower()
-            # STRICT CHECK: Sirf woh links uthao jo saalon ke folders hon (jaise 2026, 2025, 2024...)
-            if any(yr in text_clean for yr in ['2026', '2025', '2024', '2023', '2022']):
-                if not any(bad in text_clean for bad in ['bollywood', 'hollywood', 'south', 'punjabi', 'bhojpuri', 'marathi', 'tamil', 'telugu', 'series']):
+            text_clean = text.strip()
+            # STRICT MATCH: Sirf woh link uthao jismein exact target year likha ho aur koi doosri category na ho
+            if str(target_year) in text_clean:
+                if not any(bad in text_clean.lower() for bad in ['bollywood', 'bengali', 'punjabi', 'bhojpuri', 'marathi', 'tamil', 'telugu', 'series']):
                     abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                    if abs_url not in year_folders and abs_url != category_url:
-                        year_folders.append(abs_url)
-                
-    # Agar category page par direct year folders na milen, toh khud category URL ko hi as a main page treat karo taake bot empty na लौटे
-    if not year_folders:
-        print("No specific year folders found, using category URL directly.")
-        year_folders = [category_url]
-    else:
-        year_folders = sorted(list(set(year_folders)), reverse=True)
+                    if target_year in abs_url or target_year in text_clean:
+                        target_url = abs_url
+                        print(f"Found Target Year Folder for {target_year}: {target_url}")
+                        break
+                        
+    if not target_url:
+        print(f"Could not find explicit folder for {target_year}, falling back to category URL.")
+        target_url = category_url
         
-    print(f"Valid Folders Found: {year_folders}")
-    return year_folders
+    return [target_url]
 
 async def get_paginated_movies(page, year_url):
     current_url = year_url
@@ -169,23 +167,23 @@ async def get_paginated_movies(page, year_url):
         
         for link in links:
             href = await link.get_attribute("href")
+            text = await link.inner_text()
             
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 path_lower = abs_url.lower()
+                text_lower = text.lower() if text else ""
                 
-                # STRICT MOVIE CHECK: Link aisi honi chahiye jo movie detail page ho (jaise /id/name.html)
-                # Aur category / genre / index pages bilkul ignore hon
+                # STRICT MOVIE CHECK: Link must be a movie detail page (e.g. /id/movie-name.html)
+                # Must NOT contain category, series list, or other junk keywords
                 if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
-                    if "/category/" not in path_lower and not any(skip in path_lower for skip in ['latest-', '-movies.html', '-series.html', 'tagalog', 'bhojpuri']):
+                    if "/category/" not in path_lower and not any(skip in path_lower for skip in ['latest-', '-movies.html', '-series.html', 'tagalog', 'bhojpuri', 'short-films', 'wwe']):
                         if abs_url not in all_movie_urls and abs_url not in page_movies:
                             page_movies.append(abs_url)
                 
-                # Pagination handle karne ke liye
-                text = await link.inner_text()
-                text_lower = text.lower() if text else ""
+                # Pagination link detection
                 if "next" in text_lower or ">" in text_lower or ">>" in text_lower:
-                    if not next_page_url and ("page" in abs_url or "index" in abs_url):
+                    if not next_page_url and ("page" in abs_url or "index" in abs_url or "dir" in abs_url):
                         next_page_url = abs_url
 
         all_movie_urls.extend(page_movies)
@@ -198,16 +196,21 @@ async def get_paginated_movies(page, year_url):
     return list(set(all_movie_urls))
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Fixed Scraper Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Targeted Bot ID: {BOT_ID}")
     
-    TARGET_CATEGORIES = {
-        1: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
-        2: "https://mp4moviez.computer/category/latest-bollywood-movies.html",
-        3: "https://mp4moviez.computer/category/punjabi-movies.html",
-        4: "https://mp4moviez.computer/category/south-indian-hindi-dubbed-movies.html"
+    # Har Bot ko aik specific Year aur Category assign kar di gai hai taake koi aapas mein takra na ho!
+    BOT_ASSIGNMENTS = {
+        1: {"category": "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html", "year": "2026"},
+        2: {"category": "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html", "year": "2025"},
+        3: {"category": "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html", "year": "2024"},
+        4: {"category": "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html", "year": "2023"}
     }
     
-    my_category = TARGET_CATEGORIES.get(BOT_ID, TARGET_CATEGORIES[1])
+    assignment = BOT_ASSIGNMENTS.get(BOT_ID, BOT_ASSIGNMENTS[1])
+    my_category = assignment["category"]
+    target_year = assignment["year"]
+    
+    print(f"Bot {BOT_ID} assigned to Category: {my_category} | Target Year: {target_year}")
     
     completed = 0
     start_time = time.time()
@@ -222,14 +225,14 @@ async def run_bot():
         page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
         await Stealth().apply_stealth_async(page)
         
-        folders = await get_year_folders(page, my_category)
+        folders = await get_target_year_folder(page, my_category, target_year)
         
         for f_url in folders:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break
             
             movie_pages = await get_paginated_movies(page, f_url)
-            print(f"Total REAL movies found: {len(movie_pages)}")
+            print(f"Total REAL movies found for year {target_year}: {len(movie_pages)}")
             
             for m_url in movie_pages:
                 if completed >= MAX_MOVIES_PER_RUN: break
