@@ -101,13 +101,14 @@ def upload_to_archive_and_sync(meta, video_paths):
 def download_with_aria2(url, work_dir):
     print(f"Downloading: {url}")
     cmd = [
-        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", url
+        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
+        "--content-disposition-default-utf8=true", url
     ]
     try:
         subprocess.run(cmd, check=True, timeout=2400) 
         for root, dirs, files in os.walk(work_dir):
             for file in files:
-                if file.endswith((".mp4", ".mkv", ".zip", ".rar")):
+                if file.lower().endswith((".mp4", ".mkv", ".zip", ".rar")):
                     return os.path.join(root, file)
     except:
         print(f"Aria2 download failed for {url}")
@@ -187,6 +188,7 @@ async def run_bot():
             print(f"\n--- Opening Movie Page: {m_url} ---")
             try:
                 await page.goto(m_url, timeout=60000)
+                await page.wait_for_timeout(2000)
             except:
                 continue
             
@@ -202,67 +204,38 @@ async def run_bot():
                 print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                 continue
             
-            # --- DEEP SCRAPER FOR MP4 LINKS ---
+            # === SIMPLE DIRECT LINK EXTRACTOR (FIXED CASE SENSITIVITY) ===
             movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
+            all_links = await page.locator("a").all()
             
-            async def scan_for_files():
-                for a in await page.locator("a").all():
-                    t = (await a.inner_text()).lower()
-                    h = await a.get_attribute("href")
-                    if not h: continue
-                    h = urllib.parse.urljoin(BASE_DOMAIN, h)
-                    
-                    if h.endswith((".mp4", ".mkv", ".zip", ".rar")):
-                        if any(bad in t for bad in ["jio", "low quality"]): continue
-                        
-                        if "1080" in t or "1080" in h or "full hd" in t:
-                            if not movie_links["url_1080p"]: movie_links["url_1080p"] = h
-                        elif "720" in t or "720" in h:
-                            if not movie_links["url_720p"]: movie_links["url_720p"] = h
-                        elif "480" in t or "480" in h:
-                            if not movie_links["url_480p"]: movie_links["url_480p"] = h
-                        else:
-                            # Default to 720p if no resolution is mentioned
-                            if not movie_links["url_720p"]: movie_links["url_720p"] = h
-
-            # 1. Pehle direct page par scan karega
-            await scan_for_files()
-            
-            # 2. Agar nahi mili, toh 'Download BluRay' wale agle page par jaye
-            if not any(movie_links.values()):
-                inter_urls = []
-                for a in await page.locator("a").all():
-                    t = (await a.inner_text()).lower()
-                    h = await a.get_attribute("href")
-                    if h and "download" in t and "mp4moviez" not in t and "free download" not in t:
-                        if any(q in t for q in ['bluray', 'hdrip', 'web-dl', 'hd', 'part', 'movie']):
-                            inter_urls.append(urllib.parse.urljoin(BASE_DOMAIN, h))
+            for link in all_links:
+                text = await link.inner_text()
+                href = await link.get_attribute("href")
                 
-                for iu in set(inter_urls):
-                    if any(movie_links.values()): break
-                    print(f"Navigating to intermediate page: {iu}")
-                    try:
-                        await page.goto(iu, timeout=60000)
-                        await scan_for_files()
-                        
-                        # 3. Agar us page par servers ke links (480p, 720p) hain, toh wahan jayega
-                        if not any(movie_links.values()):
-                            qual_urls = []
-                            for qa in await page.locator("a").all():
-                                qt = (await qa.inner_text()).lower()
-                                qh = await qa.get_attribute("href")
-                                if qh and ("480" in qt or "720" in qt or "1080" in qt or "server" in qt):
-                                    qual_urls.append(urllib.parse.urljoin(BASE_DOMAIN, qh))
-                            
-                            for qu in set(qual_urls):
-                                try:
-                                    print(f"Navigating to server page: {qu}")
-                                    await page.goto(qu, timeout=60000)
-                                    await scan_for_files()
-                                except: pass
-                    except:
-                        pass
-            # -----------------------------------
+                if not href:
+                    continue
+                    
+                text_lower = text.lower() if text else ""
+                href_lower = href.lower()
+                
+                # Sirf "Jio Users" wale links ko skip karna hai
+                if "(for jio users only)" in text_lower or "jio users" in text_lower:
+                    continue
+                    
+                href_abs = urllib.parse.urljoin(BASE_DOMAIN, href)
+                
+                # FIX: Capital .Mp4 ya chota .mp4, dono ko pakdega
+                if href_lower.endswith((".mp4", ".mkv", ".zip", ".rar")):
+                    
+                    if "1080p" in text_lower or "1080" in text_lower:
+                        if not movie_links["url_1080p"]: movie_links["url_1080p"] = href_abs
+                    elif "720p" in text_lower or "720" in text_lower:
+                        if not movie_links["url_720p"]: movie_links["url_720p"] = href_abs
+                    elif "480p" in text_lower or "480" in text_lower:
+                        if not movie_links["url_480p"]: movie_links["url_480p"] = href_abs
+                    else:
+                        # Agar resolution nahi likhi to usay 720p maan le
+                        if not movie_links["url_720p"]: movie_links["url_720p"] = href_abs
 
             if any(movie_links.values()):
                 wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
@@ -288,7 +261,7 @@ async def run_bot():
                         
                 shutil.rmtree(wd, ignore_errors=True)
             else:
-                print("No suitable download links found even after deep scan.")
+                print("No suitable download links found on this page.")
                 
         await browser.close()
     print("Bot run completed.")
