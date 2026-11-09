@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bot_id: [1, 2, 3, 4] # Pehle 4 bots test karenge
+        bot_id: [1, 2, 3, 4]
 
     steps:
       - name: Checkout Repository
@@ -26,12 +26,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install chromium
+          # Playwright aur Linux libraries install
+          playwright install --with-deps chromium
           sudo apt-get update
           sudo apt-get install -y aria2
 
       - name: Run Playwright Bot
-        run: python mp4moviez_bot.py
+        # Yeh aapki Python file (archive_bot.py) ko chalayega
+        run: python archive_bot.py
         env:
           BOT_ID: ${{ matrix.bot_id }}
           IA_ACCESS: ${{ secrets.IA_ACCESS }}
