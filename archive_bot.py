@@ -134,15 +134,22 @@ async def get_year_folders(page, category_url):
         href = await link.get_attribute("href")
         
         if href and text:
-            text_clean = text.strip()
-            # STRICT FILTER: Only grab numerical years or specific folder patterns, ignoring category menus
-            if re.search(r'\b(2026|2025|2024|2023|2022|2021)\b', text_clean) and not any(m in text_clean.lower() for m in ['bollywood', 'hollywood', 'south', 'punjabi', 'bhojpuri', 'marathi', 'tamil', 'telugu']):
-                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if abs_url not in year_folders and abs_url != category_url:
-                    year_folders.append(abs_url)
+            text_clean = text.strip().lower()
+            # STRICT CHECK: Sirf woh links uthao jo saalon ke folders hon (jaise 2026, 2025, 2024...)
+            if any(yr in text_clean for yr in ['2026', '2025', '2024', '2023', '2022']):
+                if not any(bad in text_clean for bad in ['bollywood', 'hollywood', 'south', 'punjabi', 'bhojpuri', 'marathi', 'tamil', 'telugu', 'series']):
+                    abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
+                    if abs_url not in year_folders and abs_url != category_url:
+                        year_folders.append(abs_url)
                 
-    year_folders = sorted(list(set(year_folders)), reverse=True)
-    print(f"Valid Year Folders Found: {year_folders}")
+    # Agar category page par direct year folders na milen, toh khud category URL ko hi as a main page treat karo taake bot empty na लौटे
+    if not year_folders:
+        print("No specific year folders found, using category URL directly.")
+        year_folders = [category_url]
+    else:
+        year_folders = sorted(list(set(year_folders)), reverse=True)
+        
+    print(f"Valid Folders Found: {year_folders}")
     return year_folders
 
 async def get_paginated_movies(page, year_url):
@@ -150,39 +157,35 @@ async def get_paginated_movies(page, year_url):
     all_movie_urls = []
     
     while current_url:
-        print(f"Scanning Year Page: {current_url}")
-        await page.goto(current_url, timeout=60000)
+        print(f"Scanning Page: {current_url}")
+        try:
+            await page.goto(current_url, timeout=60000)
+        except:
+            break
         
         links = await page.locator("a").all()
         page_movies = []
         next_page_url = None
         
         for link in links:
-            text = await link.inner_text()
             href = await link.get_attribute("href")
             
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 path_lower = abs_url.lower()
-                filename = path_lower.split('/')[-1]
                 
-                # STRICT IGNORE FOR CATEGORY / GENRE INDEX PAGES
-                is_category_link = False
-                if "/category/" in path_lower:
-                    is_category_link = True
-                elif filename.startswith("latest-") or filename.endswith("-movies.html") or filename.endswith("-series.html"):
-                    is_category_link = True
-                elif any(bad in filename for bad in ['tagalog', 'bhojpuri', 'gujarati', 'marathi', 'wwe', 'short-films', 'web-series']):
-                    is_category_link = True
+                # STRICT MOVIE CHECK: Link aisi honi chahiye jo movie detail page ho (jaise /id/name.html)
+                # Aur category / genre / index pages bilkul ignore hon
+                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
+                    if "/category/" not in path_lower and not any(skip in path_lower for skip in ['latest-', '-movies.html', '-series.html', 'tagalog', 'bhojpuri']):
+                        if abs_url not in all_movie_urls and abs_url not in page_movies:
+                            page_movies.append(abs_url)
                 
-                # Match only individual movie detail paths (e.g. /123/movie-name.html)
-                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_category_link:
-                    if abs_url not in all_movie_urls and abs_url not in page_movies:
-                        page_movies.append(abs_url)
-                
+                # Pagination handle karne ke liye
+                text = await link.inner_text()
                 text_lower = text.lower() if text else ""
                 if "next" in text_lower or ">" in text_lower or ">>" in text_lower:
-                    if not next_page_url and ("page" in abs_url or "index" in abs_url or "dir" in abs_url):
+                    if not next_page_url and ("page" in abs_url or "index" in abs_url):
                         next_page_url = abs_url
 
         all_movie_urls.extend(page_movies)
@@ -219,14 +222,14 @@ async def run_bot():
         page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
         await Stealth().apply_stealth_async(page)
         
-        year_folders = await get_year_folders(page, my_category)
+        folders = await get_year_folders(page, my_category)
         
-        for y_url in year_folders:
+        for f_url in folders:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break
             
-            movie_pages = await get_paginated_movies(page, y_url)
-            print(f"Total REAL movies found in year folder: {len(movie_pages)}")
+            movie_pages = await get_paginated_movies(page, f_url)
+            print(f"Total REAL movies found: {len(movie_pages)}")
             
             for m_url in movie_pages:
                 if completed >= MAX_MOVIES_PER_RUN: break
