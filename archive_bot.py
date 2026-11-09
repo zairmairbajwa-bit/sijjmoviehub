@@ -143,7 +143,7 @@ async def get_year_folders(page, category_url):
     return year_folders
 
 async def get_paginated_movies(page, year_url):
-    """Year folder ke saare pages scan kar ke sirf ASALI movies nikalna (Index/Category pages ignore)"""
+    """Year folder ke saare pages scan kar ke STRICTLY sirf asali movies nikalna"""
     current_url = year_url
     all_movie_urls = []
     
@@ -162,15 +162,19 @@ async def get_paginated_movies(page, year_url):
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 path_lower = abs_url.lower()
+                filename = path_lower.split('/')[-1]
                 
-                # SMART FILTER: Category ya Year-Index pages ko block karna (jo 'latest-' se shuru hon ya '-movies' rakhte hon)
+                # ULTRA-STRICT FILTER: Year folder ke andar jo sub-category ya index pages hote hain
                 is_index_page = False
                 if "/category/" in path_lower:
                     is_index_page = True
-                elif "latest-" in path_lower and "movies" in path_lower and "episode" not in path_lower and "season" not in path_lower:
+                # Agar filename 'latest-' se shuru ho aur usme movies/series/dubbed ho toh woh sub-category hai, movie nahi
+                elif filename.startswith("latest-") and any(w in filename for w in ['movies', 'series', 'dubbed', 'tv-series', 'bengali', 'bollywood', 'hollywood', 'punjabi', 'south']):
+                    is_index_page = True
+                elif any(bad in filename for bad in ['tagalog', 'bhojpuri', 'gujarati', 'marathi', 'wwe', 'south-indian']):
                     is_index_page = True
                 
-                # Sirf wohi link uthayega jo Asali Movie/Series post ka ho
+                # Sirf wohi link uthayega jo Asali Movie / Series post ka ho (ID folder + .html + not index)
                 if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_index_page:
                     if abs_url not in all_movie_urls and abs_url not in page_movies:
                         page_movies.append(abs_url)
@@ -191,7 +195,7 @@ async def get_paginated_movies(page, year_url):
     return all_movie_urls
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Smart Filter Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Ultra-Strict Bot ID: {BOT_ID}")
     
     TARGET_CATEGORIES = {
         1: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
