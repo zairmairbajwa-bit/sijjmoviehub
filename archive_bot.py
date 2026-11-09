@@ -38,7 +38,6 @@ def is_already_in_firebase(tmdb_id):
     return False
 
 def search_tmdb_from_title(raw_title):
-    """Website ke title ko saaf kar ke TMDB se asali ID aur Data nikalna"""
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', raw_title)
     clean = re.sub(r'(?i)(hindi dubbed|full movie|download|mp4moviez|hdrip|bluray|web-dl|1080p|720p|480p|movies|series|season|episode|ep).*', '', clean)
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
@@ -117,7 +116,6 @@ async def handle_new_page(popup):
         pass
 
 async def get_year_folders(page, category_url):
-    """Main category se (2026, 2025) wale folders nikalna"""
     print(f"Scanning Main Category for Year Folders: {category_url}")
     await page.goto(category_url, timeout=60000)
     
@@ -136,29 +134,40 @@ async def get_year_folders(page, category_url):
         text = await link.inner_text()
         href = await link.get_attribute("href")
         
-        # Link mein (2026) ya 2025 jaisa saal likha hona chahiye
         if href and text and re.search(r'\b(19|20)\d{2}\b', text):
             abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-            # Make sure it's a folder, not a direct movie link
             if abs_url not in year_folders and not re.search(r'/\d+/[^/]+\.html$', abs_url):
                 year_folders.append(abs_url)
                 
     return year_folders
 
 async def get_movies_from_year_page(page, year_url):
-    """Year folder se movies nikalna (Nayi movies pehle)"""
     print(f"Scanning Year Folder for Movies: {year_url}")
     await page.goto(year_url, timeout=60000)
     
     links = await page.locator("a").all()
-    movie_urls = [] # List banayi hai taake naya uper aur purana neechay rahe
+    movie_urls = []
+    
+    # YAHAN BLACKLIST FILTER LAGAYA GAYA HAI
+    bad_keywords = [
+        'latest-hollywood', 'latest-bollywood', 'latest-bengali', 'latest-punjabi',
+        'south-indian', 'bhojpuri', 'gujarati', 'marathi', 'wwe-', 
+        '-movies-', '-tv-series', '-web-series', 'category'
+    ]
     
     for link in links:
         href = await link.get_attribute("href")
         if href:
             abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-            # Yeh ID wala direct movie link hona chahiye
+            filename = abs_url.split('/')[-1].lower()
+            
+            # Agar URL ke aakhir mein category ka naam hai toh reject kar do
+            is_category = any(bad in filename for bad in bad_keywords)
+            
             if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
+                if is_category:
+                    # Ignore the category sub-folder
+                    continue
                 if abs_url not in movie_urls:
                     movie_urls.append(abs_url)
                     
@@ -167,12 +176,11 @@ async def get_movies_from_year_page(page, year_url):
 async def run_bot():
     print(f"Starting SijjMoviesHub Deep Directory Scraper Bot ID: {BOT_ID}")
     
-    # Sirf Hollywood, Bollywood aur Punjabi Categories par focus (Bhojpuri/South ignored)
     TARGET_CATEGORIES = [
         "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
         "https://mp4moviez.computer/category/latest-bollywood-movies.html",
         "https://mp4moviez.computer/category/punjabi-movies.html",
-        "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html" # Bot 4 ke liye repeat
+        "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html"
     ]
     
     my_category = TARGET_CATEGORIES[(BOT_ID - 1) % len(TARGET_CATEGORIES)]
@@ -190,19 +198,16 @@ async def run_bot():
         page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
         await Stealth().apply_stealth_async(page)
         
-        # Step 1: Get Year Folders (e.g., 2026, 2025)
         year_folders = await get_year_folders(page, my_category)
         print(f"Found {len(year_folders)} Year Folders!")
         
-        # Step 2: Har saal ke folder mein jana
         for y_url in year_folders:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break
             
             movie_pages = await get_movies_from_year_page(page, y_url)
-            print(f"Found {len(movie_pages)} REAL movies in {y_url} (Newest First)!")
+            print(f"Found {len(movie_pages)} REAL movies in {y_url} (Filtered Kachra)!")
             
-            # Step 3: Nayi movies se shuru kar ke download karna
             for m_url in movie_pages:
                 if completed >= MAX_MOVIES_PER_RUN: break
                 if (time.time() - start_time) > 20000: break 
