@@ -5,7 +5,8 @@ import asyncio
 import re
 import urllib.parse
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+# Yahan import theek kar diya gaya hai
+from playwright_stealth import stealth 
 import requests
 import subprocess
 import internetarchive as ia
@@ -109,19 +110,17 @@ async def search_and_extract_mp4moviez(page, movie_title):
             print("18+ Captcha bypassed successfully!")
             await page.wait_for_timeout(3000)
     except:
-        pass # Captcha nahi aaya
+        pass 
 
-    # Search results mein se pehli movie ka link uthana
     movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
     
     try:
-        # Pura exact HTML/CSS check kar raha hai movies links ke liye
         links = await page.locator("a").all()
         target_movie_page = None
         for link in links:
             text = await link.inner_text()
             href = await link.get_attribute("href")
-            # Sirf wohi link uthayega jo search ki hui movie se milta ho
+            
             if href and "movie" in href and movie_title.lower()[:5] in text.lower():
                 target_movie_page = href
                 break
@@ -169,7 +168,8 @@ async def run_bot():
         context.on("page", lambda page: asyncio.create_task(handle_new_page(page)))
         
         page = await context.new_page()
-        await stealth_async(page)
+        # Yahan call theek kar di gayi hai
+        await stealth(page)
         
         for p_num in range(BOT_ID, 50, 8):
             if completed >= MAX_MOVIES_PER_RUN: break
