@@ -143,9 +143,17 @@ async def get_year_folders(page, category_url):
     return year_folders
 
 async def get_paginated_movies(page, year_url):
-    """Year folder ke saare pages (Page 1, Page 2...) ko scan kar ke saari movies nikalna"""
+    """Year folder ke saare pages scan kar ke sirf ASALI movies nikalna (Menu/Category ignore)"""
     current_url = year_url
     all_movie_urls = []
+    
+    # Menu aur Category wale kachra words ki strict blacklist
+    bad_keywords = [
+        'category', 'movies.html', 'series.html', 'tagalog', 'bhojpuri', 
+        'gujarati', 'marathi', 'wwe', 'south-indian', 'punjabi-movies', 
+        'bollywood-movies', 'hollywood-movies', 'tv-series', 'web-series',
+        'bengali', 'pakistani', 'telugu', 'tamil'
+    ]
     
     while current_url:
         print(f"Scanning Year Page: {current_url}")
@@ -161,20 +169,24 @@ async def get_paginated_movies(page, year_url):
             
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                # Movie link check
-                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
+                filename = abs_url.split('/')[-1].lower()
+                
+                # Check agar yeh koi category ya menu link hai
+                is_category = any(bad in filename for bad in bad_keywords)
+                
+                # Sirf wohi link jo Asali Movie ka ho (ID folder ho + .html ho + category na ho)
+                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_category:
                     if abs_url not in all_movie_urls and abs_url not in page_movies:
                         page_movies.append(abs_url)
                 
                 # Next page link check
                 text_lower = text.lower() if text else ""
                 if "next" in text_lower or ">" in text_lower or ">>" in text_lower:
-                    if not next_page_url and "category" in abs_url or "page" in abs_url:
+                    if not next_page_url and ("category" in abs_url or "page" in abs_url):
                         next_page_url = abs_url
 
         all_movie_urls.extend(page_movies)
         
-        # Agar agla page hai toh loop wahan tak chalega, warna ruk jayega
         if next_page_url and next_page_url != current_url:
             current_url = next_page_url
         else:
@@ -183,7 +195,7 @@ async def get_paginated_movies(page, year_url):
     return all_movie_urls
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Paginated Hierarchical Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Strict Filter Bot ID: {BOT_ID}")
     
     TARGET_CATEGORIES = {
         1: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
@@ -207,20 +219,16 @@ async def run_bot():
         page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
         await Stealth().apply_stealth_async(page)
         
-        # Step 1: Get Year Folders
         year_folders = await get_year_folders(page, my_category)
         print(f"Found {len(year_folders)} Year Folders: {year_folders}")
         
-        # Step 2: Loop through each year folder (2026 first, then 2025...)
         for y_url in year_folders:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break
             
-            # Get all movies across all pages of this year
             movie_pages = await get_paginated_movies(page, y_url)
             print(f"Total REAL movies found across pages in this year folder: {len(movie_pages)}")
             
-            # Step 3: Process each movie from top to bottom
             for m_url in movie_pages:
                 if completed >= MAX_MOVIES_PER_RUN: break
                 if (time.time() - start_time) > 20000: break 
@@ -252,13 +260,11 @@ async def run_bot():
                         
                     text_lower = text.lower() if text else ""
                     
-                    # IGNORE JIO / PC ONLY LINKS
                     if "jio users only" in text_lower or "pc users" in text_lower:
                         continue
                         
                     href = urllib.parse.urljoin(BASE_DOMAIN, href)
                     
-                    # Accept mp4, mkv or complete zip archives for seasons
                     if not href.lower().endswith((".mp4", ".mkv", ".zip", ".rar")):
                         continue
                         
