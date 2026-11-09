@@ -146,12 +146,11 @@ async def get_paginated_movies(page, start_url):
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
     
-    # Absolute Direct URLs taake koi ghalti na ho
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
         2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
-        3: "https://www.mp4moviez.computer/0289/latest-hollywood-hindi-dubbed-movies-(2024).html",
-        4: "https://www.mp4moviez.computer/0235/latest-hollywood-hindi-dubbed-movies-(2023).html"
+        3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
+        4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
     }
     
     target_url = BOT_DIRECT_URLS.get(BOT_ID, BOT_DIRECT_URLS[1])
@@ -161,7 +160,6 @@ async def run_bot():
     start_time = time.time()
     
     async with async_playwright() as p:
-        # User Agent zaroori hai taake website bot samajh kar block na kare
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
         context = await browser.new_context(
             accept_downloads=True,
@@ -210,22 +208,31 @@ async def run_bot():
                     continue
                     
                 text_lower = text.lower() if text else ""
+                href = await link.get_attribute("href")
+                
+                if not href or href == "#": 
+                    continue
                 
                 # Kachra links ko skip karna
                 if "jio users" in text_lower or "low quality" in text_lower:
                     continue
                     
-                # Sirf us button ko pakarna jis par .mp4 ya .mkv likha ho
-                if ".mp4" in text_lower or ".mkv" in text_lower:
-                    if "1080p" in text_lower or "1080" in text_lower or "full hd" in text_lower:
+                # FIX: Ab sirf .mp4 par depend nahi karega. Koi bhi resolution likhi ho, usay utha lega!
+                if any(res in text_lower for res in ['.mp4', '.mkv', '1080', '720', '480', 'pc hd']):
+                    
+                    # Generic website buttons ko avoid karein
+                    if any(nav in text_lower for nav in ['home', 'category', 'disclaimer', 'contact']):
+                        continue
+                        
+                    if "1080" in text_lower or "full hd" in text_lower:
                         target_link = link
                         res_label = "url_1080p"
                         break # Best quality mil gayi, loop tor do
-                    elif "720p" in text_lower or "720" in text_lower or "pc hd" in text_lower:
+                    elif "720" in text_lower or "pc hd" in text_lower:
                         if res_label != "url_1080p":
                             target_link = link
                             res_label = "url_720p"
-                    elif "480p" in text_lower or "480" in text_lower:
+                    elif "480" in text_lower:
                         if not res_label:
                             target_link = link
                             res_label = "url_480p"
@@ -240,14 +247,12 @@ async def run_bot():
             downloaded_paths = {}
 
             try:
-                # Bot button par click karega aur download shuru hone ka intezar karega
                 async with page.expect_download(timeout=120000) as download_info:
                     await target_link.click(force=True)
                 
                 download = await download_info.value
                 file_name = download.suggested_filename
                 
-                # Check agar ghalti se .html download ho rahi hai toh usay save hi mat karo
                 if file_name.lower().endswith(".html"):
                     print("Blocked an HTML file download!")
                 else:
