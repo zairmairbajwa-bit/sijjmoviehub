@@ -32,8 +32,8 @@ jobs:
           sudo apt-get install -y aria2
 
       - name: Run Playwright Bot
-        # Yeh aapki Python file (archive_bot.py) ko chalayega
-        run: python archive_bot.py
+        # Yahan '-u' lagaya hai taake logs live show hon!
+        run: python -u archive_bot.py
         env:
           BOT_ID: ${{ matrix.bot_id }}
           IA_ACCESS: ${{ secrets.IA_ACCESS }}
