@@ -21,7 +21,7 @@ BOT_ID = int(os.getenv("BOT_ID", "1"))
 IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
 
-MAX_MOVIES_PER_RUN = 3
+MAX_MOVIES_PER_RUN = 5
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -102,7 +102,7 @@ def download_with_aria2(url, work_dir):
         subprocess.run(cmd, check=True, timeout=2400) 
         for root, dirs, files in os.walk(work_dir):
             for file in files:
-                if file.endswith((".mp4", ".mkv")):
+                if file.endswith((".mp4", ".mkv", ".zip", ".rar")):
                     return os.path.join(root, file)
     except:
         print(f"Aria2 download failed for {url}")
@@ -116,7 +116,7 @@ async def handle_new_page(popup):
         pass
 
 async def get_year_folders(page, category_url):
-    print(f"Scanning Main Category for Year Folders: {category_url}")
+    print(f"Scanning Category for Year Folders: {category_url}")
     await page.goto(category_url, timeout=60000)
     
     try:
@@ -134,56 +134,65 @@ async def get_year_folders(page, category_url):
         text = await link.inner_text()
         href = await link.get_attribute("href")
         
-        if href and text and re.search(r'\b(19|20)\d{2}\b', text):
+        if href and text and re.search(r'\b(2026|2025|2024|2023)\b', text):
             abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-            if abs_url not in year_folders and not re.search(r'/\d+/[^/]+\.html$', abs_url):
+            if abs_url not in year_folders:
                 year_folders.append(abs_url)
                 
+    year_folders = sorted(year_folders, reverse=True) # Newest year first (2026...)
     return year_folders
 
-async def get_movies_from_year_page(page, year_url):
-    print(f"Scanning Year Folder for Movies: {year_url}")
-    await page.goto(year_url, timeout=60000)
+async def get_paginated_movies(page, year_url):
+    """Year folder ke saare pages (Page 1, Page 2...) ko scan kar ke saari movies nikalna"""
+    current_url = year_url
+    all_movie_urls = []
     
-    links = await page.locator("a").all()
-    movie_urls = []
-    
-    # YAHAN BLACKLIST FILTER LAGAYA GAYA HAI
-    bad_keywords = [
-        'latest-hollywood', 'latest-bollywood', 'latest-bengali', 'latest-punjabi',
-        'south-indian', 'bhojpuri', 'gujarati', 'marathi', 'wwe-', 
-        '-movies-', '-tv-series', '-web-series', 'category'
-    ]
-    
-    for link in links:
-        href = await link.get_attribute("href")
-        if href:
-            abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-            filename = abs_url.split('/')[-1].lower()
+    while current_url:
+        print(f"Scanning Year Page: {current_url}")
+        await page.goto(current_url, timeout=60000)
+        
+        links = await page.locator("a").all()
+        page_movies = []
+        next_page_url = None
+        
+        for link in links:
+            text = await link.inner_text()
+            href = await link.get_attribute("href")
             
-            # Agar URL ke aakhir mein category ka naam hai toh reject kar do
-            is_category = any(bad in filename for bad in bad_keywords)
+            if href:
+                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
+                # Movie link check
+                if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
+                    if abs_url not in all_movie_urls and abs_url not in page_movies:
+                        page_movies.append(abs_url)
+                
+                # Next page link check
+                text_lower = text.lower() if text else ""
+                if "next" in text_lower or ">" in text_lower or ">>" in text_lower:
+                    if not next_page_url and "category" in abs_url or "page" in abs_url:
+                        next_page_url = abs_url
+
+        all_movie_urls.extend(page_movies)
+        
+        # Agar agla page hai toh loop wahan tak chalega, warna ruk jayega
+        if next_page_url and next_page_url != current_url:
+            current_url = next_page_url
+        else:
+            break
             
-            if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url):
-                if is_category:
-                    # Ignore the category sub-folder
-                    continue
-                if abs_url not in movie_urls:
-                    movie_urls.append(abs_url)
-                    
-    return movie_urls
+    return all_movie_urls
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Deep Directory Scraper Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Paginated Hierarchical Bot ID: {BOT_ID}")
     
-    TARGET_CATEGORIES = [
-        "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
-        "https://mp4moviez.computer/category/latest-bollywood-movies.html",
-        "https://mp4moviez.computer/category/punjabi-movies.html",
-        "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html"
-    ]
+    TARGET_CATEGORIES = {
+        1: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
+        2: "https://mp4moviez.computer/category/latest-bollywood-movies.html",
+        3: "https://mp4moviez.computer/category/punjabi-movies.html",
+        4: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html"
+    }
     
-    my_category = TARGET_CATEGORIES[(BOT_ID - 1) % len(TARGET_CATEGORIES)]
+    my_category = TARGET_CATEGORIES.get(BOT_ID, TARGET_CATEGORIES[1])
     
     completed = 0
     start_time = time.time()
@@ -198,21 +207,25 @@ async def run_bot():
         page.on("popup", lambda popup: asyncio.create_task(handle_new_page(popup)))
         await Stealth().apply_stealth_async(page)
         
+        # Step 1: Get Year Folders
         year_folders = await get_year_folders(page, my_category)
-        print(f"Found {len(year_folders)} Year Folders!")
+        print(f"Found {len(year_folders)} Year Folders: {year_folders}")
         
+        # Step 2: Loop through each year folder (2026 first, then 2025...)
         for y_url in year_folders:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break
             
-            movie_pages = await get_movies_from_year_page(page, y_url)
-            print(f"Found {len(movie_pages)} REAL movies in {y_url} (Filtered Kachra)!")
+            # Get all movies across all pages of this year
+            movie_pages = await get_paginated_movies(page, y_url)
+            print(f"Total REAL movies found across pages in this year folder: {len(movie_pages)}")
             
+            # Step 3: Process each movie from top to bottom
             for m_url in movie_pages:
                 if completed >= MAX_MOVIES_PER_RUN: break
                 if (time.time() - start_time) > 20000: break 
 
-                print(f"\n--- Opening Movie Page: {m_url} ---")
+                print(f"\n--- Opening Movie/Series Page: {m_url} ---")
                 await page.goto(m_url, timeout=60000)
                 
                 raw_title = await page.title()
@@ -224,26 +237,37 @@ async def run_bot():
                     
                 tmdb_id = str(tmdb_data["id"])
                 if is_already_in_firebase(tmdb_id):
-                    print(f"Movie {tmdb_id} is already in Firebase. Skipping to next...")
+                    print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                     continue
                 
                 movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
                 all_download_links = await page.locator("a").all()
+                
                 for link in all_download_links:
                     text = await link.inner_text()
                     href = await link.get_attribute("href")
                     
-                    if not href or "Jio Users Only" in text:
+                    if not href:
+                        continue
+                        
+                    text_lower = text.lower() if text else ""
+                    
+                    # IGNORE JIO / PC ONLY LINKS
+                    if "jio users only" in text_lower or "pc users" in text_lower:
                         continue
                         
                     href = urllib.parse.urljoin(BASE_DOMAIN, href)
-                    if not href.lower().endswith(".mp4"):
+                    
+                    # Accept mp4, mkv or complete zip archives for seasons
+                    if not href.lower().endswith((".mp4", ".mkv", ".zip", ".rar")):
                         continue
                         
-                    text = text.lower()
-                    if "480p" in text and not movie_links["url_480p"]: movie_links["url_480p"] = href
-                    elif "720p" in text and not movie_links["url_720p"]: movie_links["url_720p"] = href
-                    elif "1080p" in text and not movie_links["url_1080p"]: movie_links["url_1080p"] = href
+                    if "480p" in text_lower and not movie_links["url_480p"]: 
+                        movie_links["url_480p"] = href
+                    elif "720p" in text_lower and not movie_links["url_720p"]: 
+                        movie_links["url_720p"] = href
+                    elif ("1080p" in text_lower or "full hd" in text_lower) and not movie_links["url_1080p"]: 
+                        movie_links["url_1080p"] = href
 
                 if any(movie_links.values()):
                     wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
@@ -269,7 +293,7 @@ async def run_bot():
                             
                     shutil.rmtree(wd, ignore_errors=True)
                 else:
-                    print("No direct mp4 links found on this page.")
+                    print("No suitable download links found on this page.")
                     
         await browser.close()
     print("Bot run completed.")
