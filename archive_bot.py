@@ -129,7 +129,6 @@ async def get_paginated_movies(page, start_url):
         
         links = await page.locator("a").all()
         page_movies = []
-        next_page_url = None
         
         for link in links:
             href = await link.get_attribute("href")
@@ -138,41 +137,19 @@ async def get_paginated_movies(page, start_url):
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 path_lower = abs_url.lower()
-                text_lower = text.lower() if text else ""
                 
-                # FIXED MOVIE CHECK: Accept any valid .html movie page that is not category, home, or disclaimer
-                if abs_url.endswith(".html") and not any(skip in path_lower for skip in ['category', 'disclaimer', 'report', 'index', 'home']):
-                    # Must contain a number/id in path or movie filename structure
-                    if re.search(r'/\d+/', abs_url):
+                # FIXED PATTERN: /c61797/movie-name.html (letters + numbers)
+                if abs_url.endswith(".html") and re.search(r'/[a-z0-9]+/[^/]+\.html$', abs_url, re.IGNORECASE):
+                    if not any(skip in path_lower for skip in ['category', 'disclaimer', 'report', 'index', 'home', 'contact']):
                         if abs_url not in all_movie_urls and abs_url not in page_movies:
                             page_movies.append(abs_url)
-                
-                # Pagination detection for multi-pages (Next / numbers)
-                if "next" in text_lower or ">>" in text_lower or text.strip().isdigit():
-                    if abs_url != current_url and abs_url not in all_movie_urls:
-                        if "page" in abs_url or re.search(r'/\d+/', abs_url):
-                            if not next_page_url and text.strip().isdigit():
-                                next_page_url = abs_url
-
-        # Check footer numeric pagination buttons
-        try:
-            for link in links:
-                pl_text = await link.inner_text()
-                pl_href = await link.get_attribute("href")
-                if pl_href and pl_text.strip().isdigit():
-                    pl_abs = urllib.parse.urljoin(BASE_DOMAIN, pl_href)
-                    if pl_abs not in all_movie_urls and pl_abs != current_url and pl_abs not in page_movies:
-                        page_movies.append(pl_abs)
-        except:
-            pass
 
         all_movie_urls.extend(page_movies)
         print(f"Total links gathered so far: {len(all_movie_urls)}")
-        
-        break  # Scan current page list
+        break # Abhi ke liye 1 page run kar rahe hain
             
-    # Filter valid movie URLs
-    real_movies = [u for u in all_movie_urls if abs_url.endswith(".html") and not any(x in u for x in ['category', 'disclaimer', 'report'])]
+    # Clean and filter real movie links (exclude main year page itself)
+    real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
 async def run_bot():
