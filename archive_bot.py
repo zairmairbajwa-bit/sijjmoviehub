@@ -38,21 +38,13 @@ def is_already_in_firebase(tmdb_id):
     return False
 
 def search_tmdb_from_title(raw_title):
-    # FIXED TMDB SEARCH LOGIC
     clean = raw_title
-    
-    # 1. Sirf 'Download' ya 'Mp4moviez' jaisay lafz hataye ga bina baqi naam delete kiye
     clean = re.sub(r'(?i)\bDownload\b', '', clean)
     clean = re.sub(r'(?i)in HD Mp4moviez', '', clean)
     clean = re.sub(r'(?i)Mp4moviez', '', clean)
-    
-    # 2. 'Hindi Dubbed' ya uske baad ka sab kuch delete karega (kyunke asal naam pehle hota hai)
     clean = re.sub(r'(?i)(hindi dubbed|full movie|hdrip|bluray|web-dl|1080p|720p|480p).*', '', clean)
-    
-    # 3. Saal (2026) waghera ko hatayega
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
-    
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
@@ -137,7 +129,6 @@ async def get_paginated_movies(page, start_url):
             await page.goto(current_url, timeout=60000)
             await page.wait_for_timeout(2000)
         except Exception as e:
-            print(f"Failed to load {current_url}: {e}")
             break
         
         links = await page.locator("a").all()
@@ -145,13 +136,9 @@ async def get_paginated_movies(page, start_url):
         
         for link in links:
             href = await link.get_attribute("href")
-            text = await link.inner_text()
-            
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 path_lower = abs_url.lower()
-                
-                # FIXED PATTERN: /c61797/movie-name.html (letters + numbers)
                 if abs_url.endswith(".html") and re.search(r'/[a-z0-9]+/[^/]+\.html$', abs_url, re.IGNORECASE):
                     if not any(skip in path_lower for skip in ['category', 'disclaimer', 'report', 'index', 'home', 'contact']):
                         if abs_url not in all_movie_urls and abs_url not in page_movies:
@@ -159,7 +146,7 @@ async def get_paginated_movies(page, start_url):
 
         all_movie_urls.extend(page_movies)
         print(f"Total links gathered so far: {len(all_movie_urls)}")
-        break # Abhi ke liye 1 page run kar rahe hain
+        break 
             
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
@@ -212,37 +199,70 @@ async def run_bot():
                 
             tmdb_id = str(tmdb_data["id"])
             if is_already_in_firebase(tmdb_id):
-                print(f"Movie {tmdb_id} is already in Firebase with all resolutions. Skipping...")
+                print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                 continue
             
+            # --- DEEP SCRAPER FOR MP4 LINKS ---
             movie_links = {"url_480p": None, "url_720p": None, "url_1080p": None}
-            all_download_links = await page.locator("a").all()
             
-            for link in all_download_links:
-                text = await link.inner_text()
-                href = await link.get_attribute("href")
-                
-                if not href:
-                    continue
+            async def scan_for_files():
+                for a in await page.locator("a").all():
+                    t = (await a.inner_text()).lower()
+                    h = await a.get_attribute("href")
+                    if not h: continue
+                    h = urllib.parse.urljoin(BASE_DOMAIN, h)
                     
-                text_lower = text.lower() if text else ""
+                    if h.endswith((".mp4", ".mkv", ".zip", ".rar")):
+                        if any(bad in t for bad in ["jio", "low quality"]): continue
+                        
+                        if "1080" in t or "1080" in h or "full hd" in t:
+                            if not movie_links["url_1080p"]: movie_links["url_1080p"] = h
+                        elif "720" in t or "720" in h:
+                            if not movie_links["url_720p"]: movie_links["url_720p"] = h
+                        elif "480" in t or "480" in h:
+                            if not movie_links["url_480p"]: movie_links["url_480p"] = h
+                        else:
+                            # Default to 720p if no resolution is mentioned
+                            if not movie_links["url_720p"]: movie_links["url_720p"] = h
+
+            # 1. Pehle direct page par scan karega
+            await scan_for_files()
+            
+            # 2. Agar nahi mili, toh 'Download BluRay' wale agle page par jaye
+            if not any(movie_links.values()):
+                inter_urls = []
+                for a in await page.locator("a").all():
+                    t = (await a.inner_text()).lower()
+                    h = await a.get_attribute("href")
+                    if h and "download" in t and "mp4moviez" not in t and "free download" not in t:
+                        if any(q in t for q in ['bluray', 'hdrip', 'web-dl', 'hd', 'part', 'movie']):
+                            inter_urls.append(urllib.parse.urljoin(BASE_DOMAIN, h))
                 
-                # STRICT SKIP FOR JIO USERS / PC ONLY / LOW QUALITY
-                if any(bad_kw in text_lower for bad_kw in ["jio users", "pc users", "low quality", "server 2"]):
-                    continue
-                    
-                href = urllib.parse.urljoin(BASE_DOMAIN, href)
-                
-                if not href.lower().endswith((".mp4", ".mkv", ".zip", ".rar")):
-                    continue
-                    
-                # Capture all 3 resolutions
-                if "480p" in text_lower and not movie_links["url_480p"]: 
-                    movie_links["url_480p"] = href
-                elif "720p" in text_lower and not movie_links["url_720p"]: 
-                    movie_links["url_720p"] = href
-                elif ("1080p" in text_lower or "full hd" in text_lower) and not movie_links["url_1080p"]: 
-                    movie_links["url_1080p"] = href
+                for iu in set(inter_urls):
+                    if any(movie_links.values()): break
+                    print(f"Navigating to intermediate page: {iu}")
+                    try:
+                        await page.goto(iu, timeout=60000)
+                        await scan_for_files()
+                        
+                        # 3. Agar us page par servers ke links (480p, 720p) hain, toh wahan jayega
+                        if not any(movie_links.values()):
+                            qual_urls = []
+                            for qa in await page.locator("a").all():
+                                qt = (await qa.inner_text()).lower()
+                                qh = await qa.get_attribute("href")
+                                if qh and ("480" in qt or "720" in qt or "1080" in qt or "server" in qt):
+                                    qual_urls.append(urllib.parse.urljoin(BASE_DOMAIN, qh))
+                            
+                            for qu in set(qual_urls):
+                                try:
+                                    print(f"Navigating to server page: {qu}")
+                                    await page.goto(qu, timeout=60000)
+                                    await scan_for_files()
+                                except: pass
+                    except:
+                        pass
+            # -----------------------------------
 
             if any(movie_links.values()):
                 wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
@@ -268,7 +288,7 @@ async def run_bot():
                         
                 shutil.rmtree(wd, ignore_errors=True)
             else:
-                print("No suitable download links found on this page.")
+                print("No suitable download links found even after deep scan.")
                 
         await browser.close()
     print("Bot run completed.")
