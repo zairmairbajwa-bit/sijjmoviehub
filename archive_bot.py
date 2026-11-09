@@ -255,33 +255,49 @@ async def run_bot():
             downloaded_paths = {}
 
             # ==========================================
-            # 🕵️ THE SMART NETWORK SNIFFER (FIXED)
+            # 🕵️ ADVANCED "DNA" (CONTENT-TYPE) SNIFFER
             # ==========================================
             stolen_media_url = None
             
-            def sniff_network(request):
+            async def sniff_response(response):
                 nonlocal stolen_media_url
-                url = request.url
-                # Pehle check karein ke link ke end mein asal file extension ho (na ke domain mein)
-                # Split '?' isliye kiya taake agar link ke aagay ?token=123 likha ho toh masla na ho
-                clean_url = url.lower().split('?')[0]
-                if (clean_url.endswith('.mp4') or clean_url.endswith('.mkv')) and not stolen_media_url:
-                    stolen_media_url = url
-                    print(f"🕵️ [SNIFFER] Asli media link chura liya: {url}")
+                if stolen_media_url: return
+                
+                try:
+                    url = response.url.lower()
+                    headers = response.headers
+                    content_type = headers.get("content-type", "").lower()
+                    
+                    # Agar page HTML, JS, CSS ya Image hai, toh seedha ignore karo (Kachra saaf)
+                    if ".html" in url or "text/html" in content_type or ".js" in url or ".css" in url or "image/" in content_type:
+                        return
 
-            context.on("request", sniff_network)
+                    # Agar data sach mein video hai (video/mp4) ya phir downloading file (octet-stream) hai
+                    if "video/" in content_type or "application/octet-stream" in content_type or "application/x-download" in content_type:
+                        stolen_media_url = response.url
+                        print(f"🕵️ [SNIFFER] Asli media link chura liya (Content-Type: {content_type}): {response.url}")
+                        
+                    # Fallback Backup: Agar server ne Type nahi batayi, lekin link ke aakhir mein .mp4 maujood hai
+                    elif (".mp4" in url or ".mkv" in url) and ".html" not in url:
+                        stolen_media_url = response.url
+                        print(f"🕵️ [SNIFFER] Asli media link chura liya (URL End): {response.url}")
+                except Exception:
+                    pass
+
+            # Is baar hum Response ka wait kar rahe hain taake file ka Data Type mil sakay
+            context.on("response", sniff_response)
             
             popups = []
             def handle_new_tab(new_page):
                 popups.append(new_page)
             context.on("page", handle_new_tab)
 
-            print(f"Clicking button for {res_label} and waiting for Sniffer to catch the link...")
+            print(f"Clicking button for {res_label} and waiting for Advanced Sniffer to catch the link...")
             try:
                 await target_link.click(force=True)
                 
-                # Maximum 20 seconds wait karega
-                for _ in range(20):
+                # Sniffer ko thora time do (Max 25 seconds) background requests process karne ke liye
+                for _ in range(25):
                     if stolen_media_url:
                         break
                     await asyncio.sleep(1)
@@ -289,8 +305,8 @@ async def run_bot():
             except Exception as e:
                 print(f"Error clicking link: {e}")
 
-            # Safai
-            context.remove_listener("request", sniff_network)
+            # Safai - Jasoos hatao
+            context.remove_listener("response", sniff_response)
             context.remove_listener("page", handle_new_tab)
             for p in popups:
                 try: await p.close()
@@ -306,7 +322,7 @@ async def run_bot():
                     downloaded_paths[res_label] = path
                     print(f"Download complete via Aria2c: {path}")
             else:
-                print("❌ Sniffer failed to catch the media link. Website might be using a completely hidden blob or different format.")
+                print("❌ Sniffer failed to catch the media link. The button might just be a dead end or requires complex captcha.")
 
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
