@@ -255,22 +255,22 @@ async def run_bot():
             downloaded_paths = {}
 
             # ==========================================
-            # 🕵️ THE NETWORK SNIFFER (JASOOS) LOGIC
+            # 🕵️ THE SMART NETWORK SNIFFER (FIXED)
             # ==========================================
             stolen_media_url = None
             
             def sniff_network(request):
                 nonlocal stolen_media_url
                 url = request.url
-                # Check agar background mein mp4 ya mkv link call ho raha hai
-                if ('.mp4' in url.lower() or '.mkv' in url.lower()) and not stolen_media_url:
+                # Pehle check karein ke link ke end mein asal file extension ho (na ke domain mein)
+                # Split '?' isliye kiya taake agar link ke aagay ?token=123 likha ho toh masla na ho
+                clean_url = url.lower().split('?')[0]
+                if (clean_url.endswith('.mp4') or clean_url.endswith('.mkv')) and not stolen_media_url:
                     stolen_media_url = url
                     print(f"🕵️ [SNIFFER] Asli media link chura liya: {url}")
 
-            # Poore browser context par jasoos bitha diya (Taa ke popups se bhi link pakar sakay)
             context.on("request", sniff_network)
             
-            # Popups ko track aur kill karne ke liye
             popups = []
             def handle_new_tab(new_page):
                 popups.append(new_page)
@@ -278,10 +278,9 @@ async def run_bot():
 
             print(f"Clicking button for {res_label} and waiting for Sniffer to catch the link...")
             try:
-                # Sirf click karega, download ka wait nahi karega
                 await target_link.click(force=True)
                 
-                # Maximum 20 seconds tak background requests ka wait karega
+                # Maximum 20 seconds wait karega
                 for _ in range(20):
                     if stolen_media_url:
                         break
@@ -290,7 +289,7 @@ async def run_bot():
             except Exception as e:
                 print(f"Error clicking link: {e}")
 
-            # Safai - Jasoos hata do aur kachra tabs band kar do
+            # Safai
             context.remove_listener("request", sniff_network)
             context.remove_listener("page", handle_new_tab)
             for p in popups:
