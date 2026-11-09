@@ -134,16 +134,19 @@ async def get_year_folders(page, category_url):
         text = await link.inner_text()
         href = await link.get_attribute("href")
         
-        if href and text and re.search(r'\b(2026|2025|2024|2023)\b', text):
-            abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-            if abs_url not in year_folders:
-                year_folders.append(abs_url)
+        if href and text:
+            text_clean = text.strip()
+            # STRICT CHECK: Link ka text ya URL sirf saal hona chahiye (jaise '2026' ya 'Movies 2025') aur menu categories nahi honi chahiye
+            if re.search(r'\b(2026|2025|2024|2023)\b', text_clean) and not any(m in text_clean.lower() for m in ['bollywood', 'hollywood', 'south', 'punjabi', 'bhojpuri']):
+                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
+                if abs_url not in year_folders and abs_url != category_url:
+                    year_folders.append(abs_url)
                 
-    year_folders = sorted(year_folders, reverse=True)
+    year_folders = sorted(list(set(year_folders)), reverse=True)
+    print(f"Valid Year Folders Found: {year_folders}")
     return year_folders
 
 async def get_paginated_movies(page, year_url):
-    """Year folder ke saare pages scan kar ke STRICTLY sirf asali movies nikalna"""
     current_url = year_url
     all_movie_urls = []
     
@@ -164,22 +167,18 @@ async def get_paginated_movies(page, year_url):
                 path_lower = abs_url.lower()
                 filename = path_lower.split('/')[-1]
                 
-                # ULTRA-STRICT FILTER: Year folder ke andar jo sub-category ya index pages hote hain
                 is_index_page = False
                 if "/category/" in path_lower:
                     is_index_page = True
-                # Agar filename 'latest-' se shuru ho aur usme movies/series/dubbed ho toh woh sub-category hai, movie nahi
                 elif filename.startswith("latest-") and any(w in filename for w in ['movies', 'series', 'dubbed', 'tv-series', 'bengali', 'bollywood', 'hollywood', 'punjabi', 'south']):
                     is_index_page = True
                 elif any(bad in filename for bad in ['tagalog', 'bhojpuri', 'gujarati', 'marathi', 'wwe', 'south-indian']):
                     is_index_page = True
                 
-                # Sirf wohi link uthayega jo Asali Movie / Series post ka ho (ID folder + .html + not index)
                 if abs_url.endswith(".html") and re.search(r'/\d+/[^/]+\.html$', abs_url) and not is_index_page:
                     if abs_url not in all_movie_urls and abs_url not in page_movies:
                         page_movies.append(abs_url)
                 
-                # Next page link check
                 text_lower = text.lower() if text else ""
                 if "next" in text_lower or ">" in text_lower or ">>" in text_lower:
                     if not next_page_url and ("category" in abs_url or "page" in abs_url or "index" in abs_url):
@@ -195,7 +194,7 @@ async def get_paginated_movies(page, year_url):
     return all_movie_urls
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Ultra-Strict Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Menu-Ignored Bot ID: {BOT_ID}")
     
     TARGET_CATEGORIES = {
         1: "https://mp4moviez.computer/category/latest-hollywood-hindi-dubbed-movies.html",
@@ -220,20 +219,19 @@ async def run_bot():
         await Stealth().apply_stealth_async(page)
         
         year_folders = await get_year_folders(page, my_category)
-        print(f"Found {len(year_folders)} Year Folders: {year_folders}")
         
         for y_url in year_folders:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break
             
             movie_pages = await get_paginated_movies(page, y_url)
-            print(f"Total REAL movies found across pages in this year folder: {len(movie_pages)}")
+            print(f"Total REAL movies found in year folder: {len(movie_pages)}")
             
             for m_url in movie_pages:
                 if completed >= MAX_MOVIES_PER_RUN: break
                 if (time.time() - start_time) > 20000: break 
 
-                print(f"\n--- Opening Movie/Series Page: {m_url} ---")
+                print(f"\n--- Opening Movie Page: {m_url} ---")
                 await page.goto(m_url, timeout=60000)
                 
                 raw_title = await page.title()
