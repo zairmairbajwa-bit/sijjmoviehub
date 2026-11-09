@@ -101,7 +101,6 @@ def upload_to_archive_and_sync(meta, video_paths):
 
 # FALLBACK METHOD 2: Aria2c Downloader
 def download_with_aria2(url, work_dir, referer_url):
-    # Sirf us waqt Aria2 chalega agar URL mein media file ya direct downloader ho!
     if url.lower().endswith(".html"):
         print(f"Skipping Aria2c: URL is an HTML page, not a direct media link ({url})")
         return None
@@ -265,16 +264,17 @@ async def run_bot():
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
-            # --- BARA FIX YAHAN HAI ---
+            popups = []
+            def handle_popup(popup):
+                popups.append(popup)
+            page.on("popup", handle_popup)
+            
+            # --- YAHAN FIX KIYA HAI: page.expect_download wapis lagaya ---
             method_1_success = False
             try:
                 print(f"Method 1: Clicking download button for {res_label}...")
                 
-                # Context par wait karna zaroori hai, taake naye tab ki download bhi pakar sakay!
-                async with context.expect_download(timeout=90000) as download_info:
-                    await target_link.click(force=True)
-                    # Kuch websites ko fake clicks pasand hote hain ad hataane ke liye
-                    await page.wait_for_timeout(1000)
+                async with page.expect_download(timeout=90000) as download_info:
                     await target_link.click(force=True)
                     
                 download = await download_info.value
@@ -304,6 +304,14 @@ async def run_bot():
                         print(f"Download complete via Aria2c: {path}")
                 else:
                     print("Target link missing for Method 2.")
+
+            # Close any popups generated
+            for p in popups:
+                try:
+                    await p.close()
+                except:
+                    pass
+            page.remove_listener("popup", handle_popup)
 
             # Sync to Archive/Firebase
             if any(downloaded_paths.values()):
