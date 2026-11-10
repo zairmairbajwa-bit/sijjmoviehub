@@ -5,7 +5,7 @@ import asyncio
 import re
 import random
 import urllib.parse
-import io
+import base64
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth 
 import requests
@@ -13,14 +13,11 @@ import subprocess
 import internetarchive as ia
 import shutil
 
-# AI Vision ke liye
-from PIL import Image
-import pytesseract
-
 # === SECURE CREDENTIALS ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
 FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.firebaseio.com")
 BASE_DOMAIN = "https://www.mp4moviez.computer"
+OCR_API_KEY = os.getenv("OCR_API_KEY", "helloworld") # Online AI Captcha Key
 
 # === BOT SETTINGS ===
 BOT_ID = int(os.getenv("BOT_ID", "1"))
@@ -105,7 +102,6 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
-# FAST DOWNLOADER (Aria2c)
 def download_with_aria2(url, work_dir, referer_url):
     print(f"Starting Aria2c Fast Download: {url}")
     cmd = [
@@ -164,7 +160,6 @@ async def get_paginated_movies(page, start_url):
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
-# 🤖 THE "HUMAN-LIKE" CLICKING
 async def human_click(page, locator):
     try:
         await locator.scroll_into_view_if_needed()
@@ -185,8 +180,38 @@ async def human_click(page, locator):
         await locator.click(delay=150)
 
 # ==========================================
-# 🧠 ADVANCED IMAGE PROCESSING CAPTCHA SOLVER
+# 🚀 ONLINE AI API CAPTCHA SOLVER (OCR.SPACE)
 # ==========================================
+def solve_captcha_api(img_bytes):
+    try:
+        # Convert image to base64 format for the API
+        base64_img = "data:image/png;base64," + base64.b64encode(img_bytes).decode('utf-8')
+        
+        print("🌐 [API] Sending Captcha image to Online AI OCR...")
+        payload = {
+            'apikey': OCR_API_KEY,
+            'base64Image': base64_img,
+            'OCREngine': '2', # Engine 2 is best for numbers and noisy images
+            'scale': 'true'
+        }
+        
+        # Requesting OCR API
+        res = requests.post('https://api.ocr.space/parse/image', data=payload, timeout=15)
+        result = res.json()
+        
+        if not result.get("IsErroredOnProcessing"):
+            parsed_text = result["ParsedResults"][0]["ParsedText"]
+            print(f"📝 [API] Raw API Text: {parsed_text.strip()}")
+            
+            # Extract only numbers from the result
+            num = "".join(filter(str.isdigit, parsed_text))
+            return num
+        else:
+            print(f"❌ [API] Error from OCR Service: {result.get('ErrorMessage')}")
+    except Exception as e:
+        print(f"❌ [API] Request Failed: {e}")
+    return None
+
 async def try_solve_captcha(target_page):
     try:
         if target_page.is_closed(): return False
@@ -196,64 +221,46 @@ async def try_solve_captcha(target_page):
                 input_loc = frame.locator("input[type='text']").first
                 btn_loc = frame.locator("input[type='submit'], button, input[value='Continue'], input[type='button']").first
                 
-                # Agar Input box aur Button mil jayein
                 if await input_loc.count() > 0 and await btn_loc.count() > 0 and await input_loc.is_visible():
-                    print(f"🚨 [CAPTCHA] Suspicious elements found in Frame: {frame.url[:60]}...")
+                    print(f"🚨 [CAPTCHA] Elements found in Frame: {frame.url[:60]}...")
                     
-                    # Frame mein mojood SAARI tasveeron (images) ko bari bari check karo
                     all_imgs = await frame.locator("img").all()
                     
                     for img_loc in all_imgs:
                         try:
                             box = await img_loc.bounding_box()
-                            # Chotay icons (jaise 10x10) ko ignore karo, captcha thora bara hota hai (eg. 100x40)
                             if box and box['width'] > 30 and box['height'] > 15:
-                                print(f"📸 [CAPTCHA] Analyzing image (Size: {int(box['width'])}x{int(box['height'])})...")
+                                print(f"📸 [CAPTCHA] Capturing image (Size: {int(box['width'])}x{int(box['height'])})...")
                                 
                                 await img_loc.scroll_into_view_if_needed()
                                 await img_loc.wait_for(state="visible", timeout=3000)
                                 img_bytes = await img_loc.screenshot()
                                 
-                                # --- 🪄 JADU: IMAGE ENHANCEMENT (HACKER TRICKS) ---
-                                img = Image.open(io.BytesIO(img_bytes)).convert('L') # 1. Grayscale
+                                # Use Online API instead of local Tesseract
+                                num = solve_captcha_api(img_bytes)
                                 
-                                # 2. Upscale (3x Bada karna taake OCR asani se parhe)
-                                img = img.resize((img.width * 3, img.height * 3), Image.Resampling.LANCZOS)
-                                
-                                # 3. Binarization / Thresholding (Background kachra khatam, text pure black)
-                                threshold = 140
-                                img = img.point(lambda p: 255 if p > threshold else 0)
-                                # --------------------------------------------------
-                                
-                                # OCR se parhna (Sirf Numbers ki ijazat hai)
-                                text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
-                                num = "".join(filter(str.isdigit, text))
-                                
-                                # Captcha kam az kam 3 digits ka zaroor hota hai
                                 if num and len(num) >= 3:
-                                    print(f"🤖 [CAPTCHA] AI Vision Extracted Pure Numbers: {num}")
+                                    print(f"🤖 [CAPTCHA] Online AI Extracted Numbers: {num}")
                                     await input_loc.fill(num)
-                                    await target_page.wait_for_timeout(500) # Insaan ki tarah thora thehar ke
+                                    await target_page.wait_for_timeout(500)
                                     await btn_loc.click()
-                                    print("✅ [CAPTCHA] Submitted! Waiting for redirect to real movie...")
+                                    print("✅ [CAPTCHA] Submitted! Waiting for redirect...")
                                     await target_page.wait_for_timeout(5000)
                                     return True
+                                else:
+                                    print("❌ [CAPTCHA] Online AI could not find valid numbers.")
                         except Exception:
                             continue
-                            
-                    print("❌ [CAPTCHA] AI checked all images but no valid numbers detected.")
             except Exception:
                 pass
             return False
 
-        # Har frame (khirki) ko scan karo
         for frame in target_page.frames:
             if await process_frame(frame): 
                 return True
                     
     except Exception as e:
         pass
-        
     return False
 
 async def run_bot():
@@ -301,12 +308,10 @@ async def run_bot():
             
             tmdb_data = search_tmdb_from_title(raw_title)
             if not tmdb_data:
-                print("Could not match with TMDB. Skipping...")
                 continue
                 
             tmdb_id = str(tmdb_data["id"])
             if is_already_in_firebase(tmdb_id):
-                print(f"Movie {tmdb_id} is already in Firebase. Skipping...")
                 continue
             
             all_links = await page.locator("a").all()
@@ -337,16 +342,12 @@ async def run_bot():
                         if not res_label: target_link = link; res_label = "url_480p"
 
             if not target_link:
-                print("No suitable download link found on this page.")
                 continue
                 
             wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
-            # ==========================================
-            # 🕵️ STRICT CLOUDFLARE-FILTERED SNIFFER
-            # ==========================================
             stolen_media_url = None
             
             async def sniff_response(response):
@@ -378,7 +379,6 @@ async def run_bot():
             print(f"Performing HUMAN-LIKE click for {res_label} and waiting for Filtered Sniffer...")
             await human_click(page, target_link)
             
-            # Wait loop: Check for media link AND aggressive Captcha hunt
             for _ in range(25):
                 if stolen_media_url:
                     break
@@ -397,9 +397,6 @@ async def run_bot():
                 try: await p.close()
                 except: pass
 
-            # ==========================================
-            # 🚀 DIRECT DOWNLOADING VIA ARIA2C
-            # ==========================================
             if stolen_media_url:
                 print(f"🎯 Sniffer Success! Handing over pure link to Aria2c...")
                 path = download_with_aria2(stolen_media_url, wd, m_url)
