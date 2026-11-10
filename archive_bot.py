@@ -1,7 +1,6 @@
 import os
 import time
 import json
-import asyncio
 import re
 import urllib.parse
 import requests
@@ -21,7 +20,7 @@ IA_SECRET = os.getenv("IA_SECRET", "").strip()
 MAX_MOVIES_PER_RUN = 3
 TOTAL_BOTS = 4
 
-# GLOBAL SESSION
+# GLOBAL SESSION (Cookies aur tokens ko save rakhne ke liye)
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -106,15 +105,18 @@ def upload_to_archive_and_sync(meta, video_paths):
     return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Step 5: Aria2c Downloading REAL Video File -> {url}")
+    print(f"Step 5: Aria2c Downloading REAL Video File (Single Connection Mode) -> {url}")
+    # 💡 YAHAN FIX HAI: -x 1 aur -s 1 kar diya taake server 95% par connection drop na kare
     cmd = [
-        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
+        "aria2c", "--dir=" + work_dir, "--seed-time=0", 
+        "-x", "1", "-s", "1", "-j", "1", 
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
         "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         url
     ]
     try:
-        subprocess.run(cmd, check=True, timeout=3600) 
+        # Timeout 2 ghante (7200s) kar diya hai kyunke 1 connection par thora time zyada lag sakta hai
+        subprocess.run(cmd, check=True, timeout=7200) 
         for root, dirs, files in os.walk(work_dir):
             for file in files:
                 if file.lower().endswith((".mp4", ".mkv")) and not file.endswith(".aria2"):
@@ -213,13 +215,10 @@ def run_bot():
                     print(f"Step 4: Opening Redirect Page to extract actual file...")
                     session.headers.update({"Referer": resolution_page_url})
                     
-                    # 💡 STREAM=TRUE laga diya hai taake Python poori movie RAM mein download na karne lag jaye
+                    # 💡 YAHAN FIX HAI: STREAM=TRUE taake Python movie ko RAM me load na kare
                     final_page_resp = session.get(server_url, timeout=30, stream=True)
-                    
-                    real_mkv_url = final_page_resp.url # Yeh asal file ka direct link hai
-                    
-                    # Connection foran close kar do taake stuck na ho
-                    final_page_resp.close()
+                    real_mkv_url = final_page_resp.url # Yeh asal file ka link hai
+                    final_page_resp.close() # Connection foran close
                     
                     if real_mkv_url:
                         print(f"--> Success! Found Real Video Link: {real_mkv_url}")
