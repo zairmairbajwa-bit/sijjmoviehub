@@ -122,7 +122,6 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 async def get_front_page_sections(page):
-    """Step 1: Front page se saare category/year folders (2026, 2025, Hollywood Hindi, etc.) ke links nikalna"""
     print(f"Scanning Front Page: {BASE_DOMAIN}")
     section_urls = []
     
@@ -147,7 +146,6 @@ async def get_front_page_sections(page):
     return section_urls
 
 async def get_movies_from_section(page, section_url):
-    """Step 2: Folder ke andar ja kar movies ke list pages collect karna"""
     movie_pages = []
     try:
         print(f"Scanning Section Folder: {section_url}")
@@ -180,20 +178,25 @@ async def run_bot():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
-        # 🛡️ POPUP & AD BLOCKER HANDLER (Automatically closes any unexpected popups)
+        # 🛡️ POPUP & AD BLOCKER HANDLER
         def handle_popup(new_popup):
             asyncio.create_task(new_popup.close())
         context.on("page", handle_popup)
         
         page = await context.new_page()
-        await Stealth().apply_stealth_async(page)
+        
+        # Apply stealth safely on active page
+        try:
+            stealth = Stealth()
+            await stealth.apply_stealth_async(page)
+        except Exception as e:
+            print(f"Stealth notice: {e}")
         
         # Step 1: Scan Front Page for Sections/Folders
         section_urls = await get_front_page_sections(page)
         print(f"Found {len(section_urls)} category/year folders from front page.")
         
         all_movie_pages = []
-        # Step 2: Loop through sections and gather movies
         for sec_url in section_urls[:5]:
             if (time.time() - start_time) > 15000: break
             movies = await get_movies_from_section(page, sec_url)
@@ -202,7 +205,7 @@ async def run_bot():
         unique_movies = list(set(all_movie_pages))
         print(f"Total unique movies found across folders: {len(unique_movies)}")
         
-        # Step 3: Process each movie for 480p, 720p, 1080p
+        # Step 2: Process each movie for 480p, 720p, 1080p
         for m_url in unique_movies:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break 
@@ -223,7 +226,6 @@ async def run_bot():
                 print(f"Movie already fully synced in Firebase. Skipping.")
                 continue
             
-            # Extract resolution links (480p, 720p, 1080p)
             res_links = {}
             links = await page.locator("a").all()
             for link in links:
@@ -244,7 +246,6 @@ async def run_bot():
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
-            # Download each resolution
             for res_label, download_page_url in res_links.items():
                 print(f"Processing {res_label} from: {download_page_url}")
                 try:
@@ -252,7 +253,6 @@ async def run_bot():
                     await dl_page.goto(download_page_url, timeout=60000)
                     await dl_page.wait_for_timeout(3000)
                     
-                    # Target Server 4 or Server 3 for direct download
                     server_links = []
                     s_anchors = await dl_page.locator("a").all()
                     for sa in s_anchors:
@@ -264,7 +264,7 @@ async def run_bot():
                     
                     direct_file_url = None
                     if server_links:
-                        target_srv = server_links[-1] # Server 4 / direct link
+                        target_srv = server_links[-1]
                         print(f"Clicking server download link: {target_srv}")
                         
                         async with dl_page.expect_navigation(timeout=15000):
