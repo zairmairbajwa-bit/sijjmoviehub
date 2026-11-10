@@ -104,7 +104,7 @@ def upload_to_archive_and_sync(meta, video_paths):
     return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Downloading file via Aria2c...")
+    print(f"Step 4: Downloading file via Aria2c from URL -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
@@ -126,7 +126,6 @@ def run_bot():
     completed = 0
     start_time = time.time()
     
-    # STEP 1: Khufia tariqay se Home Page kholo (No Browser Crash!)
     print(f"Step 1: Opening Home Page -> {BASE_DOMAIN}")
     try:
         resp = requests.get(BASE_DOMAIN, headers=HEADERS, timeout=25)
@@ -148,7 +147,6 @@ def run_bot():
     my_movie_pages = all_movie_pages[start_idx:end_idx] if all_movie_pages else []
     print(f"Bot {BOT_ID} assigned {len(my_movie_pages)} movies.")
 
-    # STEP 2: Movie par click karo
     for m_url in my_movie_pages:
         if completed >= MAX_MOVIES_PER_RUN or (time.time() - start_time) > 20000: break 
 
@@ -169,7 +167,7 @@ def run_bot():
             continue
         
         res_links = {}
-        m_hrefs = re.findall(r'<a[^>]+href=["\'](.*?)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE)
+        m_hrefs = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL)
         for href, text in m_hrefs:
             t_low = text.lower()
             if "480p" in t_low: res_links["480p"] = urllib.parse.urljoin(BASE_DOMAIN, href)
@@ -182,45 +180,53 @@ def run_bot():
         os.makedirs(wd, exist_ok=True)
         downloaded_paths = {}
 
-        # STEP 3: Andar Resolution (jaise 720p) par click karo
         for res_label, resolution_page_url in res_links.items():
-            print(f"Step 3: Clicking on Resolution {res_label}")
+            print(f"Step 3: Clicking on Resolution {res_label} -> {resolution_page_url}")
             try:
                 res_headers = HEADERS.copy()
                 res_headers["Referer"] = m_url
                 res_resp = requests.get(resolution_page_url, headers=res_headers, timeout=25)
                 
-                # STEP 4: Server 4 ya 3 par click karo
                 server_url = None
-                s_links = re.findall(r'<a[^>]+href=["\'](.*?)["\'][^>]*>(.*?)</a>', res_resp.text, re.IGNORECASE)
                 
-                for s_href, s_text in s_links:
-                    if 'server 4' in s_text.lower():
-                        server_url = urllib.parse.urljoin(resolution_page_url, s_href)
-                        break
-                if not server_url:
-                    for s_href, s_text in s_links:
-                        if 'server 3' in s_text.lower():
-                            server_url = urllib.parse.urljoin(resolution_page_url, s_href)
-                            break
-                if not server_url and s_links:
-                    for s_href, s_text in s_links:
-                        if 'download' in s_text.lower() or 'server' in s_text.lower():
-                            server_url = urllib.parse.urljoin(resolution_page_url, s_href)
-                            break
+                # HTML mein mojood har <a> tag ko dhoondo chahay usme newlines (enters) hon (re.DOTALL lazmi tha)
+                matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', res_resp.text, re.IGNORECASE | re.DOTALL)
                 
-                if server_url:
-                    print(f"Step 4: Clicking on Server link to start download...")
+                available_servers = {}
+                for match in matches:
+                    href = match.group(1)
                     
-                    # Direct Server Link mil gaya, ab Aria2 ko de do
+                    # Button ke andar se saare <font>, <div> tags hataye aur pure text nikal liya
+                    clean_text = re.sub(r'<[^>]+>', ' ', match.group(2)).replace('\n', ' ').strip().lower()
+                    
+                    # Exact red buttons pakraye
+                    if 'server 4' in clean_text: available_servers[4] = href
+                    elif 'server 3' in clean_text: available_servers[3] = href
+                    elif 'server 6' in clean_text: available_servers[6] = href
+                    elif 'server 5' in clean_text: available_servers[5] = href
+                    elif 'server 2' in clean_text: available_servers[2] = href
+                    elif 'server 1' in clean_text: available_servers[1] = href
+                    elif 'server' in clean_text: available_servers[99] = href
+                
+                # Priority: Pehle 4, phir 3, phir 6 waghera
+                for s_num in [4, 3, 6, 5, 2, 1, 99]:
+                    if s_num in available_servers:
+                        server_url = urllib.parse.urljoin(resolution_page_url, available_servers[s_num])
+                        print(f"--> Found 'Server {s_num}' button! Link: {server_url}")
+                        break
+                        
+                if server_url:
+                    print(f"Step 4: Clicking Server Link -> {server_url}")
                     f_path = download_with_aria2(server_url, wd, resolution_page_url)
                     if f_path: downloaded_paths[res_label] = f_path
                     
-                    print(f"Step 5: Going BACK to the previous page...")
-                    time.sleep(2) # Insano ki tarah thoda delay
+                    print(f"Step 5: Download finished. Going BACK...")
+                    time.sleep(2) 
+                else:
+                    print(f"❌ ERROR: Is page par red server buttons nahi milay! Pura page check kar liya.")
                     
             except Exception as e:
-                print(f"Failed download step for {res_label}: {e}")
+                print(f"❌ Failed download step for {res_label}: {e}")
 
         if downloaded_paths:
             title = tmdb_data.get("title", "Untitled")
@@ -232,7 +238,7 @@ def run_bot():
             }
             if upload_to_archive_and_sync(meta, downloaded_paths):
                 completed += 1
-                print(f"Movie Uploaded Successfully!")
+                print(f"✅ Movie Uploaded & Synced Successfully!")
                 
         shutil.rmtree(wd, ignore_errors=True)
 
