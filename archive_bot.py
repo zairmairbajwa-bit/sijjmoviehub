@@ -5,12 +5,17 @@ import asyncio
 import re
 import random
 import urllib.parse
+import io
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth 
 import requests
 import subprocess
 import internetarchive as ia
 import shutil
+
+# AI Vision ke liye
+from PIL import Image
+import pytesseract
 
 # === SECURE CREDENTIALS ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
@@ -159,37 +164,64 @@ async def get_paginated_movies(page, start_url):
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
-# ==========================================
-# 🤖 THE "HUMAN-LIKE" CLICKING FUNCTION
-# ==========================================
+# 🤖 THE "HUMAN-LIKE" CLICKING
 async def human_click(page, locator):
     try:
-        # 1. Scroll button into view naturally
         await locator.scroll_into_view_if_needed()
         await page.wait_for_timeout(random.randint(500, 1200))
-        
         box = await locator.bounding_box()
         if box:
-            # 2. Randomize target coordinates slightly off-center
             x = box['x'] + (box['width'] / 2) + random.uniform(-10, 10)
             y = box['y'] + (box['height'] / 2) + random.uniform(-3, 3)
-            
-            # 3. Move mouse to button slowly in steps
             await page.mouse.move(x, y, steps=random.randint(10, 25))
-            await page.wait_for_timeout(random.randint(200, 600)) # Reading/hesitation delay
-            
-            # 4. Realistic Click Action (down, tiny wait, up)
+            await page.wait_for_timeout(random.randint(200, 600))
             await page.mouse.down()
             await page.wait_for_timeout(random.randint(50, 150))
             await page.mouse.up()
-            print("👤 Human-like click executed perfectly.")
+            print("👤 Human-like click executed.")
         else:
-            # Backup plan if bounding box fails
             await locator.click(delay=random.randint(100, 250))
-            print("👤 Fallback human click executed.")
     except Exception as e:
-        print(f"Human click error: {e}")
         await locator.click(delay=150)
+
+# ==========================================
+# 🧠 AI OCR CAPTCHA SOLVER (Jadoo Yahan Hai)
+# ==========================================
+async def try_solve_captcha(target_page):
+    try:
+        if target_page.is_closed(): return False
+        
+        # Agar URL mein auralogicpine ho ya captcha ka text nazar aaye
+        if "auralogicpine" in target_page.url or await target_page.locator("text=Please type the numbers").count() > 0:
+            print(f"🚨 CAPTCHA Detected on: {target_page.url}")
+            
+            img_loc = target_page.locator("img").first
+            input_loc = target_page.locator("input[type='text']").first
+            btn_loc = target_page.locator("input[type='submit'], button, input[value='Continue']").first
+            
+            if await img_loc.count() > 0 and await input_loc.count() > 0:
+                print("📸 Capturing Captcha Image for AI...")
+                img_bytes = await img_loc.screenshot()
+                
+                # Image ko saaf aur Black & White karna taake AI asani se parh le
+                img = Image.open(io.BytesIO(img_bytes)).convert('L')
+                
+                # Tesseract OCR se numbers extract karna
+                text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
+                num = "".join(filter(str.isdigit, text))
+                
+                if num:
+                    print(f"🤖 AI Vision ne numbers parh liye: {num}")
+                    await input_loc.fill(num)
+                    await btn_loc.click()
+                    print("✅ Captcha Submitted! Waiting for original link...")
+                    await target_page.wait_for_timeout(4000)
+                    return True
+                else:
+                    print("❌ AI failed to read numbers from image.")
+    except Exception as e:
+        pass
+    return False
 
 
 async def run_bot():
@@ -210,8 +242,6 @@ async def run_bot():
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
-        
-        # Setting a more realistic viewport size
         context = await browser.new_context(
             accept_downloads=True,
             viewport={"width": 1366, "height": 768},
@@ -231,7 +261,7 @@ async def run_bot():
             print(f"\n--- Opening Movie Page: {m_url} ---")
             try:
                 await page.goto(m_url, timeout=60000)
-                await page.wait_for_timeout(3000) # Thora insaan wala wait page load hone ke baad
+                await page.wait_for_timeout(3000)
             except:
                 continue
             
@@ -262,26 +292,17 @@ async def run_bot():
                     continue
                 
                 text_lower = text.lower() if text else ""
-                
-                if "jio users" in text_lower or "low quality" in text_lower:
-                    continue
+                if "jio users" in text_lower or "low quality" in text_lower: continue
                     
                 if any(res in text_lower for res in ['.mp4', '.mkv', '1080', '720', '480', 'pc hd']):
-                    if any(nav in text_lower for nav in ['home', 'category', 'disclaimer', 'contact']):
-                        continue
+                    if any(nav in text_lower for nav in ['home', 'category', 'disclaimer', 'contact']): continue
                         
                     if "1080" in text_lower or "full hd" in text_lower:
-                        target_link = link
-                        res_label = "url_1080p"
-                        break
+                        target_link = link; res_label = "url_1080p"; break
                     elif "720" in text_lower or "pc hd" in text_lower:
-                        if res_label != "url_1080p":
-                            target_link = link
-                            res_label = "url_720p"
+                        if res_label != "url_1080p": target_link = link; res_label = "url_720p"
                     elif "480" in text_lower:
-                        if not res_label:
-                            target_link = link
-                            res_label = "url_480p"
+                        if not res_label: target_link = link; res_label = "url_480p"
 
             if not target_link:
                 print("No suitable download link found on this page.")
@@ -299,23 +320,16 @@ async def run_bot():
             async def sniff_response(response):
                 nonlocal stolen_media_url
                 if stolen_media_url: return
-                
                 try:
                     url = response.url.lower()
-                    
-                    if any(bad in url for bad in ['cdn-cgi', 'rum', 'analytics', 'googletagmanager', 'pixel', 'stat']):
-                        return
-
+                    if any(bad in url for bad in ['cdn-cgi', 'rum', 'analytics', 'googletagmanager', 'pixel', 'stat']): return
                     headers = response.headers
                     content_type = headers.get("content-type", "").lower()
-                    
-                    if any(ext in url for ext in ['.html', '.js', '.css']) or 'text/html' in content_type or 'image/' in content_type:
-                        return
+                    if any(ext in url for ext in ['.html', '.js', '.css']) or 'text/html' in content_type or 'image/' in content_type: return
 
                     if "video/" in content_type or "application/octet-stream" in content_type or "application/x-download" in content_type:
                         stolen_media_url = response.url
                         print(f"🕵️ [SNIFFER] Asli media link chura liya (Type: {content_type}): {response.url}")
-                        
                     elif ('?'.split(url)[0].endswith('.mp4') or '?'.split(url)[0].endswith('.mkv')):
                         stolen_media_url = response.url
                         print(f"🕵️ [SNIFFER] Asli media link chura liya (Clean Extension): {response.url}")
@@ -330,17 +344,23 @@ async def run_bot():
             context.on("page", handle_new_tab)
 
             print(f"Performing HUMAN-LIKE click for {res_label} and waiting for Filtered Sniffer...")
-            
-            # 🎯 Calling our custom human-click function instead of standard .click()
             await human_click(page, target_link)
             
-            # Wait up to 25 seconds for the actual media response
+            # Wait loop: Check for media link AND try to solve Captcha if it appears
             for _ in range(25):
                 if stolen_media_url:
                     break
+                
+                # Check main page
+                await try_solve_captcha(page)
+                
+                # Check if captcha opened in a popup
+                for p in popups:
+                    if not p.is_closed():
+                        await try_solve_captcha(p)
+                        
                 await asyncio.sleep(1)
 
-            # Cleanup listeners
             context.remove_listener("response", sniff_response)
             context.remove_listener("page", handle_new_tab)
             for p in popups:
@@ -357,7 +377,7 @@ async def run_bot():
                     downloaded_paths[res_label] = path
                     print(f"Download complete via Aria2c: {path}")
             else:
-                print("❌ Sniffer failed to catch the media link. (Bot protection might still be active or the link requires manual captcha).")
+                print("❌ Sniffer failed to catch the media link. Captcha might be too hard or server failed to redirect.")
 
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
