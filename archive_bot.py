@@ -121,43 +121,19 @@ def download_with_aria2(url, work_dir, referer_url):
         print(f"Aria2 download failed: {e}")
     return None
 
-async def get_front_page_sections(page):
-    print(f"Scanning Front Page: {BASE_DOMAIN}")
-    section_urls = []
-    
+async def get_movies_from_section(page, section_url):
+    movie_pages = []
     try:
-        await page.goto(BASE_DOMAIN, timeout=60000)
+        print(f"Scanning Section Folder: {section_url}")
+        await page.goto(section_url, timeout=60000, wait_domcontentloaded=True)
         await page.wait_for_timeout(3000)
         
         links = await page.locator("a").all()
         for link in links:
             href = await link.get_attribute("href")
-            text = await link.inner_text()
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                t_lower = (text or "").lower()
-                
-                if any(y in abs_url.lower() or y in t_lower for y in ['2026', '2025', '2024', 'hollywood-hindi', 'south-indian-hindi']):
-                    if abs_url not in section_urls and not any(skip in abs_url.lower() for skip in ['contact', 'disclaimer', 'dmca']):
-                        section_urls.append(abs_url)
-    except Exception as e:
-        print(f"Front page scan error: {e}")
-        
-    return section_urls
-
-async def get_movies_from_section(page, section_url):
-    movie_pages = []
-    try:
-        print(f"Scanning Section Folder: {section_url}")
-        await page.goto(section_url, timeout=60000)
-        await page.wait_for_timeout(2000)
-        
-        links = await page.locator("a").all()
-        for link in links:
-            href = await link.get_attribute("href")
-            if href:
-                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if "/movie/" in abs_url and abs_url.endswith(".html"):
+                if abs_url.endswith(".html"):
                     if abs_url not in movie_pages:
                         movie_pages.append(abs_url)
     except Exception as e:
@@ -166,9 +142,17 @@ async def get_movies_from_section(page, section_url):
     return movie_pages
 
 async def run_bot():
-    print(f"Starting FilmyZilla Front-to-Folder Bot ID: {BOT_ID}")
+    print(f"Starting FilmyZilla Direct Folder Bot ID: {BOT_ID}")
     completed = 0
     start_time = time.time()
+    
+    # Direct Category URLs based on FilmyZilla structure
+    DIRECT_FOLDERS = [
+        f"{BASE_DOMAIN}/category/3134/hollywood-hindi-dubbed-movies-2026.html",
+        f"{BASE_DOMAIN}/category/3133/bollywood-hindi-movies-2026.html",
+        f"{BASE_DOMAIN}/category/3135/south-indian-hindi-dubbed-movies-2026.html",
+        f"{BASE_DOMAIN}/category/2900/hollywood-hindi-dubbed-movies-2025.html"
+    ]
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
@@ -178,41 +162,33 @@ async def run_bot():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
-        # 🛡️ POPUP & AD BLOCKER HANDLER
         def handle_popup(new_popup):
             asyncio.create_task(new_popup.close())
         context.on("page", handle_popup)
         
         page = await context.new_page()
-        
-        # Apply stealth safely on active page
         try:
             stealth = Stealth()
             await stealth.apply_stealth_async(page)
-        except Exception as e:
-            print(f"Stealth notice: {e}")
-        
-        # Step 1: Scan Front Page for Sections/Folders
-        section_urls = await get_front_page_sections(page)
-        print(f"Found {len(section_urls)} category/year folders from front page.")
+        except:
+            pass
         
         all_movie_pages = []
-        for sec_url in section_urls[:5]:
+        for sec_url in DIRECT_FOLDERS:
             if (time.time() - start_time) > 15000: break
             movies = await get_movies_from_section(page, sec_url)
             all_movie_pages.extend(movies)
             
         unique_movies = list(set(all_movie_pages))
-        print(f"Total unique movies found across folders: {len(unique_movies)}")
+        print(f"Total unique movies found: {len(unique_movies)}")
         
-        # Step 2: Process each movie for 480p, 720p, 1080p
         for m_url in unique_movies:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break 
 
             print(f"\n--- Opening Movie Page: {m_url} ---")
             try:
-                await page.goto(m_url, timeout=60000)
+                await page.goto(m_url, timeout=60000, wait_domcontentloaded=True)
                 await page.wait_for_timeout(3000)
             except:
                 continue
@@ -250,7 +226,7 @@ async def run_bot():
                 print(f"Processing {res_label} from: {download_page_url}")
                 try:
                     dl_page = await context.new_page()
-                    await dl_page.goto(download_page_url, timeout=60000)
+                    await dl_page.goto(download_page_url, timeout=60000, wait_domcontentloaded=True)
                     await dl_page.wait_for_timeout(3000)
                     
                     server_links = []
