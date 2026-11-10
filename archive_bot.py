@@ -57,6 +57,12 @@ def search_tmdb_from_title(raw_title):
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
+    
+    # Random categories ya non-movies ko foran reject karo
+    if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category', 'series']):
+        print(f"[TMDB] Skipping non-movie category title: '{clean}'")
+        return None
+        
     print(f"[TMDB] Searching clean title on TMDB: '{clean}'")
     
     url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean)}&language=hi"
@@ -224,12 +230,27 @@ def solve_captcha_api(img_bytes):
     return None
 
 # ==========================================
-# 🧠 SMART CAPTCHA & ANTI-LOOP DOWNLOAD CLICKER
+# 🧠 SMART CAPTCHA & DIRECT LINK EXTRACTOR
 # ==========================================
-async def try_solve_captcha_and_download(target_page):
+async def try_solve_captcha_and_extract_link(target_page):
     try:
-        if target_page.is_closed(): return False
+        if target_page.is_closed(): return None
         
+        # 1. Check if direct video link is already in page HTML/HREFs
+        all_anchors = await target_page.locator("a").all()
+        for a in all_anchors:
+            try:
+                href = await a.get_attribute("href")
+                if href:
+                    href_lower = href.lower()
+                    if any(href_lower.endswith(ext) for ext in ['.mp4', '.mkv']) or 'download.php' in href_lower or 'server' in href_lower:
+                        abs_link = urllib.parse.urljoin(target_page.url, href)
+                        if not any(bad in abs_link.lower() for bad in ['javascript', '#', 'contact', 'disclaimer']):
+                            print(f"🎯 [DOM EXTRACTOR] Found direct media/server link: {abs_link}")
+                            return abs_link
+            except:
+                continue
+
         async def process_frame(frame):
             try:
                 url_lower = frame.url.lower()
@@ -240,8 +261,8 @@ async def try_solve_captcha_and_download(target_page):
                         has_text = True
                 except: pass
                 
-                # Agar ye Captcha page nahi hai, toh check karo ke kya ye final Download page hai?
                 if not (is_suspicious_url or has_text):
+                    # Click valid download buttons inside frames
                     all_elements = await frame.locator("a, button, input[type='button']").all()
                     for el in all_elements:
                         try:
@@ -249,13 +270,10 @@ async def try_solve_captcha_and_download(target_page):
                             href = await el.get_attribute("href")
                             if txt:
                                 txt_lower = txt.lower()
-                                # 🛑 BLACKLIST: Sidebar / Generic category links ko bilkul ignore karo!
-                                if "new hollywood series" in txt_lower or "category" in txt_lower or "home" in txt_lower:
-                                    continue
-                                    
-                                if any(w in txt_lower for w in ['download file', 'server', 'click here', 'direct', 'fast', 'resumable', '.mp4', '.mkv']):
+                                if any(skip in txt_lower for skip in ['new hollywood series', 'category', 'home', 'disclaimer']): continue
+                                if any(w in txt_lower for w in ['download file', 'server', 'click here', 'direct', 'fast', 'resumable']):
                                     if href and not "#" in href:
-                                        print(f"🎯 [AUTO-CLICK] Clicking valid download link: {txt.strip()}")
+                                        print(f"🎯 [AUTO-CLICK] Clicking valid button: {txt.strip()}")
                                         await el.click(force=True)
                                         await target_page.wait_for_timeout(3000)
                                         return True
@@ -294,11 +312,12 @@ async def try_solve_captcha_and_download(target_page):
             return False
 
         for frame in target_page.frames:
-            if await process_frame(frame): 
-                return True
+            res = await process_frame(frame)
+            if isinstance(res, str):
+                return res
     except:
         pass
-    return False
+    return None
 
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
@@ -423,11 +442,20 @@ async def run_bot():
             for _ in range(50):
                 if stolen_media_url: break
                 
-                await try_solve_captcha_and_download(page)
+                # Check main page
+                res = await try_solve_captcha_and_extract_link(page)
+                if isinstance(res, str):
+                    stolen_media_url = res
+                    break
+                    
+                # Check popups
                 for p in popups:
                     if not p.is_closed():
-                        await try_solve_captcha_and_download(p)
-                        
+                        res = await try_solve_captcha_and_extract_link(p)
+                        if isinstance(res, str):
+                            stolen_media_url = res
+                            break
+                            
                 await asyncio.sleep(1)
 
             context.remove_listener("response", sniff_response)
