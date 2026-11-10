@@ -121,28 +121,26 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 async def run_bot():
-    print(f"Starting FilmyZilla Direct Requests Bot ID: {BOT_ID}")
+    print(f"Starting FilmyZilla Regex Bot ID: {BOT_ID}")
     completed = 0
     start_time = time.time()
     
-    # Direct requests parsing for front page to avoid headless blocks
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
     movie_pages = []
     
     try:
-        print(f"Fetching Front Page via Requests: {BASE_DOMAIN}")
+        print(f"Fetching Front Page: {BASE_DOMAIN}")
         response = requests.get(BASE_DOMAIN, headers=headers, timeout=20)
         if response.status_code == 200:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(response.text, 'html.parser')
-            for a in soup.find_all('a', href=True):
-                href = a['href']
+            # Extract href links using pure RegEx (no bs4 needed)
+            hrefs = re.findall(r'href=["\'](.*?)["\']', response.text)
+            for href in hrefs:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 if abs_url.endswith(".html") and not any(skip in abs_url.lower() for skip in ['category', 'contact', 'disclaimer', 'dmca', 'index', 'home']):
                     if abs_url not in movie_pages:
                         movie_pages.append(abs_url)
     except Exception as e:
-        print(f"Requests front page error: {e}")
+        print(f"Front page regex error: {e}")
 
     print(f"Total movies found from Front Page: {len(movie_pages)}")
     
@@ -259,7 +257,7 @@ async def run_bot():
             shutil.rmtree(wd, ignore_errors=True)
                 
         await browser.close()
-    print("FilmyZilla Direct Requests Bot run completed.")
+    print("FilmyZilla Regex Bot run completed.")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
