@@ -108,27 +108,6 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
-def download_with_aria2(url, work_dir, referer_url):
-    print(f"Starting Aria2c Fast Download: {url}")
-    cmd = [
-        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
-        "--content-disposition-default-utf8=true",
-        f"--referer={referer_url}",
-        "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        url
-    ]
-    try:
-        subprocess.run(cmd, check=True, timeout=2400) 
-        for root, dirs, files in os.walk(work_dir):
-            for file in files:
-                if file.lower().endswith((".mp4", ".mkv")):
-                    return os.path.join(root, file)
-                elif not file.endswith(".aria2") and not file.lower().endswith(".html"):
-                    return os.path.join(root, file)
-    except Exception as e:
-        print(f"Aria2 download failed: {e}")
-    return None
-
 async def get_paginated_movies(page, start_url):
     current_url = start_url
     all_movie_urls = []
@@ -240,17 +219,16 @@ async def try_solve_captcha_and_download(target_page):
                         has_text = True
                 except: pass
                 
-                # Agar ye Captcha page nahi hai, toh check karo ke kya ye final Download page hai?
                 if not (is_suspicious_url or has_text):
-                    # 🔍 Check for final download button on redirect page
-                    download_btns = await frame.locator("a, button").all()
-                    for b in download_btns:
+                    # 🔍 Check for final download buttons or server links
+                    download_links = await frame.locator("a, button").all()
+                    for b in download_links:
                         try:
                             bt_text = await b.inner_text()
                             bt_href = await b.get_attribute("href")
-                            if bt_text and any(w in bt_text.lower() for w in ['download file', 'server', 'click here', 'direct link', '.mp4', '.mkv']):
+                            if bt_text and any(w in bt_text.lower() for w in ['download file', 'server', 'click here', 'direct link', 'fast download', 'resumable']):
                                 if bt_href and not "#" in bt_href:
-                                    print(f"🎯 [AUTO-CLICK] Clicking final download button: {bt_text.strip()}")
+                                    print(f"🎯 [AUTO-CLICK] Clicking download action link: {bt_text.strip()}")
                                     await b.click(force=True)
                                     await target_page.wait_for_timeout(3000)
                                     return True
@@ -394,15 +372,30 @@ async def run_bot():
 
             context.on("response", sniff_response)
             
+            # Direct Download Event Handler (Agar browser direct download trigger kare)
+            async def handle_download(download):
+                nonlocal stolen_media_url
+                try:
+                    url = download.url
+                    if url:
+                        stolen_media_url = url
+                        print(f"🎯 [DOWNLOAD EVENT] Direct download URL captured: {url}")
+                except:
+                    pass
+
+            page.on("download", handle_download)
+            
             popups = []
             def handle_new_tab(new_page):
                 popups.append(new_page)
+                # Naye tab par bhi download event active rakho
+                new_page.on("download", handle_download)
             context.on("page", handle_new_tab)
 
             print(f"Clicking for {res_label} and hunting Captcha/Download...")
             await human_click(page, target_link)
             
-            for _ in range(45):
+            for _ in range(50):
                 if stolen_media_url: break
                 
                 await try_solve_captcha_and_download(page)
