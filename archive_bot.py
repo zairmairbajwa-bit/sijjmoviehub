@@ -17,7 +17,9 @@ import shutil
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
 FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.firebaseio.com")
 BASE_DOMAIN = "https://www.mp4moviez.computer"
-OCR_API_KEY = os.getenv("OCR_API_KEY", "helloworld") # Online AI Captcha Key
+
+# Yahan testing ke liye aapki direct API key laga di hai!
+OCR_API_KEY = "K8787437980056088957"
 
 # === BOT SETTINGS ===
 BOT_ID = int(os.getenv("BOT_ID", "1"))
@@ -184,6 +186,10 @@ async def human_click(page, locator):
 # ==========================================
 def solve_captcha_api(img_bytes):
     try:
+        if not OCR_API_KEY:
+            print("❌ [API] API Key missing in code!")
+            return None
+
         # Convert image to base64 format for the API
         base64_img = "data:image/png;base64," + base64.b64encode(img_bytes).decode('utf-8')
         
@@ -199,17 +205,18 @@ def solve_captcha_api(img_bytes):
         res = requests.post('https://api.ocr.space/parse/image', data=payload, timeout=15)
         result = res.json()
         
-        if not result.get("IsErroredOnProcessing"):
-            parsed_text = result["ParsedResults"][0]["ParsedText"]
+        if "ParsedResults" in result and len(result["ParsedResults"]) > 0:
+            parsed_text = result["ParsedResults"][0].get("ParsedText", "")
             print(f"📝 [API] Raw API Text: {parsed_text.strip()}")
             
             # Extract only numbers from the result
             num = "".join(filter(str.isdigit, parsed_text))
             return num
         else:
-            print(f"❌ [API] Error from OCR Service: {result.get('ErrorMessage')}")
+            print(f"❌ [API] API rejected the request. Raw Response: {result}")
+            
     except Exception as e:
-        print(f"❌ [API] Request Failed: {e}")
+        print(f"💥 [API] Request crashed: {str(e)}")
     return None
 
 async def try_solve_captcha(target_page):
