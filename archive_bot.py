@@ -21,7 +21,7 @@ IA_SECRET = os.getenv("IA_SECRET", "").strip()
 MAX_MOVIES_PER_RUN = 3
 TOTAL_BOTS = 4
 
-# GLOBAL SESSION (Taake Cookies aur Token save rahein)
+# GLOBAL SESSION
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -206,35 +206,25 @@ def run_bot():
                 for s_num in [4, 3, 6, 5, 2, 1]:
                     if s_num in available_servers:
                         server_url = urllib.parse.urljoin(resolution_page_url, available_servers[s_num])
-                        print(f"--> Found 'Server {s_num}' button! Link: {server_url}")
+                        print(f"--> Found 'Server {s_num}' button! Redirect Link: {server_url}")
                         break
                         
                 if server_url:
                     print(f"Step 4: Opening Redirect Page to extract actual file...")
                     session.headers.update({"Referer": resolution_page_url})
-                    # requests automatic redirects follow karta hai
-                    final_page_resp = session.get(server_url, timeout=30)
                     
-                    real_mkv_url = None
+                    # 💡 STREAM=TRUE laga diya hai taake Python poori movie RAM mein download na karne lag jaye
+                    final_page_resp = session.get(server_url, timeout=30, stream=True)
                     
-                    # Agar link khud ek file hai
-                    content_type = final_page_resp.headers.get('Content-Type', '').lower()
-                    if 'video' in content_type or 'octet-stream' in content_type:
-                        real_mkv_url = final_page_resp.url
-                    else:
-                        # Page ke andar se final mkv/mp4 dhoondo
-                        final_links = re.findall(r'href=["\']([^"\']+)["\']', final_page_resp.text, re.IGNORECASE)
-                        for flink in final_links:
-                            if '.mkv' in flink.lower() or '.mp4' in flink.lower():
-                                real_mkv_url = urllib.parse.urljoin(final_page_resp.url, flink)
-                                break
+                    real_mkv_url = final_page_resp.url # Yeh asal file ka direct link hai
+                    
+                    # Connection foran close kar do taake stuck na ho
+                    final_page_resp.close()
                     
                     if real_mkv_url:
                         print(f"--> Success! Found Real Video Link: {real_mkv_url}")
                         f_path = download_with_aria2(real_mkv_url, wd, final_page_resp.url)
                         if f_path: downloaded_paths[res_label] = f_path
-                    else:
-                        print(f"❌ Real Video link redirect page mein nahi mila!")
                     
                     time.sleep(2) 
                 else:
