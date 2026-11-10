@@ -3,7 +3,6 @@ import time
 import json
 import asyncio
 import re
-import random
 import urllib.parse
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth 
@@ -121,48 +120,36 @@ def download_with_aria2(url, work_dir, referer_url):
         print(f"Aria2 download failed: {e}")
     return None
 
-async def get_movies_from_front_page(page):
-    print(f"Scanning Front Page for Movies: {BASE_DOMAIN}")
+async def run_bot():
+    print(f"Starting FilmyZilla Direct Requests Bot ID: {BOT_ID}")
+    completed = 0
+    start_time = time.time()
+    
+    # Direct requests parsing for front page to avoid headless blocks
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
     movie_pages = []
     
-    for attempt in range(3):
-        try:
-            await page.goto(BASE_DOMAIN, timeout=60000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(4000)
-            break
-        except Exception as e:
-            print(f"Attempt {attempt+1} failed to load front page: {e}")
-            if attempt == 2: return []
-            await asyncio.sleep(3)
-    
     try:
-        links = await page.locator("a").all()
-        for link in links:
-            href = await link.get_attribute("href")
-            if href:
+        print(f"Fetching Front Page via Requests: {BASE_DOMAIN}")
+        response = requests.get(BASE_DOMAIN, headers=headers, timeout=20)
+        if response.status_code == 200:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for a in soup.find_all('a', href=True):
+                href = a['href']
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if abs_url.endswith(".html") and not any(skip in abs_url.lower() for skip in ['category', 'contact', 'disclaimer', 'dmca', 'index']):
+                if abs_url.endswith(".html") and not any(skip in abs_url.lower() for skip in ['category', 'contact', 'disclaimer', 'dmca', 'index', 'home']):
                     if abs_url not in movie_pages:
                         movie_pages.append(abs_url)
     except Exception as e:
-        print(f"Front page parsing error: {e}")
-        
-    return movie_pages
+        print(f"Requests front page error: {e}")
 
-async def run_bot():
-    print(f"Starting FilmyZilla Front Page Robust Bot ID: {BOT_ID}")
-    completed = 0
-    start_time = time.time()
+    print(f"Total movies found from Front Page: {len(movie_pages)}")
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True, 
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage'
-            ]
+            args=['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage']
         )
         context = await browser.new_context(
             accept_downloads=True,
@@ -181,12 +168,7 @@ async def run_bot():
         except:
             pass
         
-        # Step 1: Scan Front Page safely
-        unique_movies = await get_movies_from_front_page(page)
-        print(f"Total movies found directly on Front Page: {len(unique_movies)}")
-        
-        # Step 2: Process each movie for 480p, 720p, 1080p
-        for m_url in unique_movies:
+        for m_url in movie_pages:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break 
 
@@ -277,7 +259,7 @@ async def run_bot():
             shutil.rmtree(wd, ignore_errors=True)
                 
         await browser.close()
-    print("FilmyZilla Robust Bot run completed.")
+    print("FilmyZilla Direct Requests Bot run completed.")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
