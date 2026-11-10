@@ -111,6 +111,27 @@ def upload_to_archive_and_sync(meta, video_paths):
         return True
     return False
 
+def download_with_aria2(url, work_dir, referer_url):
+    print(f"Starting Aria2c Fast Download: {url}")
+    cmd = [
+        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
+        "--content-disposition-default-utf8=true",
+        f"--referer={referer_url}",
+        "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        url
+    ]
+    try:
+        subprocess.run(cmd, check=True, timeout=2400) 
+        for root, dirs, files in os.walk(work_dir):
+            for file in files:
+                if file.lower().endswith((".mp4", ".mkv")):
+                    return os.path.join(root, file)
+                elif not file.endswith(".aria2") and not file.lower().endswith(".html"):
+                    return os.path.join(root, file)
+    except Exception as e:
+        print(f"Aria2 download failed: {e}")
+    return None
+
 async def get_paginated_movies(page, start_url):
     current_url = start_url
     all_movie_urls = []
@@ -198,9 +219,30 @@ def solve_captcha_api(img_bytes):
         pass
     return None
 
-async def try_solve_captcha(target_page):
+async def try_solve_captcha_and_extract(target_page):
     try:
-        if target_page.is_closed(): return False
+        if target_page.is_closed(): return None
+        
+        # 1. Check if direct download or media link is visible on current page/popup
+        all_anchors = await target_page.locator("a").all()
+        for a in all_anchors:
+            try:
+                href = await a.get_attribute("href")
+                txt = await a.inner_text()
+                if href:
+                    href_lower = href.lower()
+                    txt_lower = txt.lower() if txt else ""
+                    if any(skip in txt_lower for skip in ['new hollywood series', 'category', 'home', 'disclaimer']): continue
+                    
+                    if any(href_lower.endswith(ext) for ext in ['.mp4', '.mkv']) or 'download' in href_lower or 'server' in href_lower or 'click here' in txt_lower:
+                        abs_link = urllib.parse.urljoin(target_page.url, href)
+                        if not any(bad in abs_link.lower() for bad in ['javascript', '#', 'contact', 'disclaimer']):
+                            print(f"🎯 [EXTRACTOR] Found direct download target link: {abs_link}")
+                            return abs_link
+            except:
+                continue
+
+        # 2. Check if Captcha is active
         for frame in target_page.frames:
             try:
                 url_lower = frame.url.lower()
@@ -219,15 +261,15 @@ async def try_solve_captcha(target_page):
                                     await target_page.wait_for_timeout(300)
                                     await btn_loc.click()
                                     await target_page.wait_for_timeout(4000)
-                                    return True
+                                    return None
             except:
                 continue
     except:
         pass
-    return False
+    return None
 
 async def run_bot():
-    print(f"Starting SijjMoviesHub Direct Download Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Direct Extraction Bot ID: {BOT_ID}")
     
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
@@ -299,31 +341,71 @@ async def run_bot():
                 
             wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
-            downloaded_file_path = None
+            downloaded_paths = {}
 
-            print(f"Clicking link for {res_label} and waiting for direct browser download...")
+            # Network sniffer as backup
+            stolen_media_url = None
+            async def sniff_response(response):
+                nonlocal stolen_media_url
+                if stolen_media_url: return
+                try:
+                    url = response.url.lower()
+                    if any(bad in url for bad in ['cdn-cgi', 'analytics', 'pixel', 'stat']): return
+                    ct = response.headers.get("content-type", "").lower()
+                    if "video/" in ct or "application/octet-stream" in ct or "application/x-download" in ct:
+                        stolen_media_url = response.url
+                        print(f"🕵️ [SNIFFER] Media caught: {response.url}")
+                    elif '?'.split(url)[0].endswith(('.mp4', '.mkv', '.avi', '.mov')):
+                        stolen_media_url = response.url
+                        print(f"🕵️ [SNIFFER] Media caught (Clean): {response.url}")
+                except:
+                    pass
+
+            context.on("response", sniff_response)
             
-            try:
-                # Playwright native download waiter
-                async with page.expect_download(timeout=45000) as download_info:
-                    await human_click(page, target_link)
-                
-                download = await download_info.value
-                file_path = os.path.join(wd, download.suggested_filename)
-                await download.save_as(file_path)
-                
-                if os.path.exists(file_path) and os.path.getsize(file_path) > 1024 * 1024:
-                    downloaded_file_path = file_path
-                    print(f"🎯 SUCCESS! File downloaded natively: {file_path}")
-            except Exception as e:
-                print(f"⚠️ Native download trigger missed, checking popups/redirects: {e}")
-                # Fallback: check if new page opened and captcha needs solving
-                for _ in range(15):
-                    await try_solve_captcha(page)
-                    await asyncio.sleep(1)
+            popups = []
+            def handle_new_tab(new_page):
+                popups.append(new_page)
+            context.on("page", handle_new_tab)
 
-            if downloaded_file_path:
-                downloaded_paths = {res_label: downloaded_file_path}
+            print(f"Clicking link for {res_label} and extracting redirect/download URL...")
+            await human_click(page, target_link)
+            
+            extracted_url = None
+            for _ in range(45):
+                if stolen_media_url or extracted_url: break
+                
+                # Check main page
+                res = await try_solve_captcha_and_extract(page)
+                if res:
+                    extracted_url = res
+                    break
+                    
+                # Check popups
+                for p in popups:
+                    if not p.is_closed():
+                        res = await try_solve_captcha_and_extract(p)
+                        if res:
+                            extracted_url = res
+                            break
+                await asyncio.sleep(1)
+
+            context.remove_listener("response", sniff_response)
+            context.remove_listener("page", handle_new_tab)
+            for p in popups:
+                try: await p.close()
+                except: pass
+
+            final_url = stolen_media_url or extracted_url
+            if final_url:
+                print(f"🎯 Handing over link to Aria2c: {final_url}")
+                path = download_with_aria2(final_url, wd, m_url)
+                if path:
+                    downloaded_paths[res_label] = path
+            else:
+                print("❌ Failed to capture final download link.")
+
+            if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
                 meta = {
                     "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
