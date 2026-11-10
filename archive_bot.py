@@ -185,49 +185,68 @@ async def human_click(page, locator):
         await locator.click(delay=150)
 
 # ==========================================
-# 🧠 AI OCR CAPTCHA SOLVER (DEBUG MODE)
+# 🧠 AI OCR CAPTCHA SOLVER (IFRAME SCANNER)
 # ==========================================
 async def try_solve_captcha(target_page):
     try:
         if target_page.is_closed(): return False
         
-        url = target_page.url.lower()
-        
-        # Check if the current page is the captcha page
-        if "auralogicpine" in url or "filter" in url or await target_page.locator("text=Please type the numbers").count() > 0:
-            print(f"🚨 [CAPTCHA] Detected on: {target_page.url}")
-            
-            # Wait for elements to be visible before acting
-            await target_page.wait_for_load_state("networkidle", timeout=5000)
-            
-            img_loc = target_page.locator("img").first
-            input_loc = target_page.locator("input[type='text']").first
-            btn_loc = target_page.locator("input[type='submit'], button, input[value='Continue']").first
-            
-            if await img_loc.count() > 0 and await input_loc.count() > 0:
-                print("📸 [CAPTCHA] Elements found! Capturing image...")
-                await img_loc.wait_for(state="visible", timeout=5000)
+        # Ek chota function jo kisi bhi Frame (Chhoti window) ko check karega
+        async def process_frame(frame):
+            try:
+                url = frame.url.lower()
                 
-                img_bytes = await img_loc.screenshot()
-                img = Image.open(io.BytesIO(img_bytes)).convert('L')
+                # Check if this frame has the captcha elements
+                has_text = False
+                try:
+                    if await frame.locator("text=Please type the numbers").count() > 0: has_text = True
+                except: pass
                 
-                text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
-                num = "".join(filter(str.isdigit, text))
-                
-                if num:
-                    print(f"🤖 [CAPTCHA] AI Vision extracted numbers: {num}")
-                    await input_loc.fill(num)
-                    await btn_loc.click()
-                    print("✅ [CAPTCHA] Submitted! Waiting for redirect...")
-                    await target_page.wait_for_timeout(5000)
+                if "auralogicpine" in url or "filter" in url or has_text:
+                    print(f"🚨 [CAPTCHA] Detected inside Frame: {url[:60]}...")
+                    
+                    # Element dhundo (Isi frame ke andar)
+                    img_loc = frame.locator("img").first
+                    input_loc = frame.locator("input[type='text']").first
+                    btn_loc = frame.locator("input[type='submit'], button, input[value='Continue']").first
+                    
+                    if await img_loc.count() > 0 and await input_loc.count() > 0:
+                        print("📸 [CAPTCHA] Elements found! Capturing image...")
+                        await img_loc.wait_for(state="visible", timeout=5000)
+                        
+                        img_bytes = await img_loc.screenshot()
+                        img = Image.open(io.BytesIO(img_bytes)).convert('L')
+                        
+                        text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
+                        num = "".join(filter(str.isdigit, text))
+                        
+                        if num:
+                            print(f"🤖 [CAPTCHA] AI Vision extracted numbers: {num}")
+                            await input_loc.fill(num)
+                            await btn_loc.click()
+                            print("✅ [CAPTCHA] Submitted! Waiting for redirect...")
+                            await target_page.wait_for_timeout(5000)
+                            return True
+                        else:
+                            print("❌ [CAPTCHA] AI failed to read numbers from the image.")
+                    else:
+                        print("⚠️ [CAPTCHA] Image/Input elements not found inside this frame.")
+            except Exception as e:
+                print(f"💥 [CAPTCHA ERROR] In Frame: {str(e)}")
+            return False
+
+        # 1. Pehle Main Page (Badi window) ko check karein
+        if await process_frame(target_page.main_frame): 
+            return True
+            
+        # 2. Phir saari andar ki Iframes (Chhoti windows) check karein
+        for frame in target_page.frames:
+            if frame != target_page.main_frame:
+                if await process_frame(frame): 
                     return True
-                else:
-                    print("❌ [CAPTCHA] AI failed to read numbers from the image.")
-            else:
-                print("⚠️ [CAPTCHA] Could not find 'img' or 'input' tags on this page.")
+                    
     except Exception as e:
-        # Pata chale ga ke kahan phat raha hai code
-        print(f"💥 [CAPTCHA ERROR] Failed to process captcha: {str(e)}")
+        print(f"💥 [CAPTCHA ERROR] Main function error: {str(e)}")
         
     return False
 
@@ -353,15 +372,15 @@ async def run_bot():
             print(f"Performing HUMAN-LIKE click for {res_label} and waiting for Filtered Sniffer...")
             await human_click(page, target_link)
             
-            # Wait loop: Check for media link AND try to solve Captcha if it appears
+            # Wait loop: Check for media link AND try to solve Captcha in ALL pages/frames
             for _ in range(25):
                 if stolen_media_url:
                     break
                 
-                # Check main page
+                # Scan Main Page and its iFrames
                 await try_solve_captcha(page)
                 
-                # Check if captcha opened in any new popup tabs
+                # Scan any popup windows and their iFrames
                 for p in popups:
                     if not p.is_closed():
                         await try_solve_captcha(p)
