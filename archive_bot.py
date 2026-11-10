@@ -21,11 +21,13 @@ IA_SECRET = os.getenv("IA_SECRET", "").strip()
 MAX_MOVIES_PER_RUN = 3
 TOTAL_BOTS = 4
 
-HEADERS = {
+# GLOBAL SESSION (Taake Cookies aur Token save rahein)
+session = requests.Session()
+session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Referer": BASE_DOMAIN
-}
+})
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -104,7 +106,7 @@ def upload_to_archive_and_sync(meta, video_paths):
     return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Step 5: Aria2c Starting Download (File) -> {url}")
+    print(f"Step 5: Aria2c Downloading REAL Video File -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
@@ -128,7 +130,7 @@ def run_bot():
     
     print(f"Step 1: Opening Home Page -> {BASE_DOMAIN}")
     try:
-        resp = requests.get(BASE_DOMAIN, headers=HEADERS, timeout=25)
+        resp = session.get(BASE_DOMAIN, timeout=25)
     except Exception as e:
         print(f"Home page fetch failed: {e}")
         return
@@ -152,7 +154,8 @@ def run_bot():
 
         print(f"\nStep 2: Clicking on Movie -> {m_url}")
         try:
-            m_resp = requests.get(m_url, headers=HEADERS, timeout=25)
+            session.headers.update({"Referer": BASE_DOMAIN})
+            m_resp = session.get(m_url, timeout=25)
         except Exception: continue
         
         title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
@@ -163,7 +166,7 @@ def run_bot():
             
         tmdb_id = str(tmdb_data["id"])
         if is_fully_in_firebase(tmdb_id):
-            print(f"Movie pehle se Firebase me hai. Wapis ja kar agli movie uthate hain.")
+            print(f"Movie pehle se Firebase me hai. Next...")
             continue
         
         res_links = {}
@@ -183,9 +186,8 @@ def run_bot():
         for res_label, resolution_page_url in res_links.items():
             print(f"Step 3: Clicking on Resolution {res_label} -> {resolution_page_url}")
             try:
-                res_headers = HEADERS.copy()
-                res_headers["Referer"] = m_url
-                res_resp = requests.get(resolution_page_url, headers=res_headers, timeout=25)
+                session.headers.update({"Referer": m_url})
+                res_resp = session.get(resolution_page_url, timeout=25)
                 
                 server_url = None
                 matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', res_resp.text, re.IGNORECASE | re.DOTALL)
@@ -200,47 +202,39 @@ def run_bot():
                     elif 'server 5' in clean_text: available_servers[5] = href
                     elif 'server 2' in clean_text: available_servers[2] = href
                     elif 'server 1' in clean_text: available_servers[1] = href
-                    elif 'server' in clean_text: available_servers[99] = href
                 
-                for s_num in [4, 3, 6, 5, 2, 1, 99]:
+                for s_num in [4, 3, 6, 5, 2, 1]:
                     if s_num in available_servers:
                         server_url = urllib.parse.urljoin(resolution_page_url, available_servers[s_num])
-                        print(f"--> Found 'Server {s_num}' button! Redirect Link: {server_url}")
+                        print(f"--> Found 'Server {s_num}' button! Link: {server_url}")
                         break
                         
                 if server_url:
-                    print(f"Step 4: Bypassing Redirect Page to get actual Video File...")
-                    # Is verification link ko pehle khud open karke check karo
-                    bypass_headers = HEADERS.copy()
-                    bypass_headers["Referer"] = resolution_page_url
-                    bypass_resp = requests.get(server_url, headers=bypass_headers, timeout=25)
+                    print(f"Step 4: Opening Redirect Page to extract actual file...")
+                    session.headers.update({"Referer": resolution_page_url})
+                    # requests automatic redirects follow karta hai
+                    final_page_resp = session.get(server_url, timeout=30)
                     
-                    final_media_url = None
-                    # Redirect page ke andar se final mkv/mp4 link pakro
-                    links_in_bypass = re.findall(r'href=["\']([^"\']+)["\']', bypass_resp.text, re.IGNORECASE)
-                    for link in links_in_bypass:
-                        if '.mkv' in link.lower() or '.mp4' in link.lower() or 'download' in link.lower() or 'dl.' in link.lower():
-                            # Yeh link social ya ads nahi hona chahiye
-                            if not any(x in link.lower() for x in ['facebook.com', 't.me', 'twitter.com']):
-                                final_media_url = urllib.parse.urljoin(server_url, link)
+                    real_mkv_url = None
+                    
+                    # Agar link khud ek file hai
+                    content_type = final_page_resp.headers.get('Content-Type', '').lower()
+                    if 'video' in content_type or 'octet-stream' in content_type:
+                        real_mkv_url = final_page_resp.url
+                    else:
+                        # Page ke andar se final mkv/mp4 dhoondo
+                        final_links = re.findall(r'href=["\']([^"\']+)["\']', final_page_resp.text, re.IGNORECASE)
+                        for flink in final_links:
+                            if '.mkv' in flink.lower() or '.mp4' in flink.lower():
+                                real_mkv_url = urllib.parse.urljoin(final_page_resp.url, flink)
                                 break
-                                
-                    # Agar andar naya link mila toh woh use karo, warna original server_url
-                    if final_media_url:
-                        print(f"--> Success! Found Real Video Link: {final_media_url}")
-                        target_download_url = final_media_url
-                    else:
-                        # Agar server_url hi final tha (lekin redirect wala) toh fallback
-                        print(f"--> No direct media link found in HTML, trying aria2c on the redirect link.")
-                        target_download_url = server_url
                     
-                    f_path = download_with_aria2(target_download_url, wd, server_url)
-                    
-                    if f_path: 
-                        downloaded_paths[res_label] = f_path
-                        print(f"Step 6: Download finished successfully.")
+                    if real_mkv_url:
+                        print(f"--> Success! Found Real Video Link: {real_mkv_url}")
+                        f_path = download_with_aria2(real_mkv_url, wd, final_page_resp.url)
+                        if f_path: downloaded_paths[res_label] = f_path
                     else:
-                        print(f"❌ Aria2c fail ho gaya ya sirf HTML download ki.")
+                        print(f"❌ Real Video link redirect page mein nahi mila!")
                     
                     time.sleep(2) 
                 else:
