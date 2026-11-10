@@ -3,6 +3,7 @@ import time
 import json
 import asyncio
 import re
+import random
 import urllib.parse
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth 
@@ -158,6 +159,39 @@ async def get_paginated_movies(page, start_url):
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
+# ==========================================
+# 🤖 THE "HUMAN-LIKE" CLICKING FUNCTION
+# ==========================================
+async def human_click(page, locator):
+    try:
+        # 1. Scroll button into view naturally
+        await locator.scroll_into_view_if_needed()
+        await page.wait_for_timeout(random.randint(500, 1200))
+        
+        box = await locator.bounding_box()
+        if box:
+            # 2. Randomize target coordinates slightly off-center
+            x = box['x'] + (box['width'] / 2) + random.uniform(-10, 10)
+            y = box['y'] + (box['height'] / 2) + random.uniform(-3, 3)
+            
+            # 3. Move mouse to button slowly in steps
+            await page.mouse.move(x, y, steps=random.randint(10, 25))
+            await page.wait_for_timeout(random.randint(200, 600)) # Reading/hesitation delay
+            
+            # 4. Realistic Click Action (down, tiny wait, up)
+            await page.mouse.down()
+            await page.wait_for_timeout(random.randint(50, 150))
+            await page.mouse.up()
+            print("👤 Human-like click executed perfectly.")
+        else:
+            # Backup plan if bounding box fails
+            await locator.click(delay=random.randint(100, 250))
+            print("👤 Fallback human click executed.")
+    except Exception as e:
+        print(f"Human click error: {e}")
+        await locator.click(delay=150)
+
+
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
     
@@ -176,8 +210,11 @@ async def run_bot():
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
+        
+        # Setting a more realistic viewport size
         context = await browser.new_context(
             accept_downloads=True,
+            viewport={"width": 1366, "height": 768},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
@@ -194,7 +231,7 @@ async def run_bot():
             print(f"\n--- Opening Movie Page: {m_url} ---")
             try:
                 await page.goto(m_url, timeout=60000)
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000) # Thora insaan wala wait page load hone ke baad
             except:
                 continue
             
@@ -266,23 +303,19 @@ async def run_bot():
                 try:
                     url = response.url.lower()
                     
-                    # 🚫 CLOUDFLARE & ANALYTICS SCRIPTS BLOCKER
                     if any(bad in url for bad in ['cdn-cgi', 'rum', 'analytics', 'googletagmanager', 'pixel', 'stat']):
                         return
 
                     headers = response.headers
                     content_type = headers.get("content-type", "").lower()
                     
-                    # Ignore HTML, JS, CSS, Images
                     if any(ext in url for ext in ['.html', '.js', '.css']) or 'text/html' in content_type or 'image/' in content_type:
                         return
 
-                    # Check Content-Type for actual video or binary download stream
                     if "video/" in content_type or "application/octet-stream" in content_type or "application/x-download" in content_type:
                         stolen_media_url = response.url
                         print(f"🕵️ [SNIFFER] Asli media link chura liya (Type: {content_type}): {response.url}")
                         
-                    # Strict URL check (Must end with real extension before query params)
                     elif ('?'.split(url)[0].endswith('.mp4') or '?'.split(url)[0].endswith('.mkv')):
                         stolen_media_url = response.url
                         print(f"🕵️ [SNIFFER] Asli media link chura liya (Clean Extension): {response.url}")
@@ -296,18 +329,16 @@ async def run_bot():
                 popups.append(new_page)
             context.on("page", handle_new_tab)
 
-            print(f"Clicking button for {res_label} and waiting for Filtered Sniffer...")
-            try:
-                await target_link.click(force=True)
-                
-                # Wait up to 25 seconds for the actual media response
-                for _ in range(25):
-                    if stolen_media_url:
-                        break
-                    await asyncio.sleep(1)
-                    
-            except Exception as e:
-                print(f"Error clicking link: {e}")
+            print(f"Performing HUMAN-LIKE click for {res_label} and waiting for Filtered Sniffer...")
+            
+            # 🎯 Calling our custom human-click function instead of standard .click()
+            await human_click(page, target_link)
+            
+            # Wait up to 25 seconds for the actual media response
+            for _ in range(25):
+                if stolen_media_url:
+                    break
+                await asyncio.sleep(1)
 
             # Cleanup listeners
             context.remove_listener("response", sniff_response)
@@ -326,7 +357,7 @@ async def run_bot():
                     downloaded_paths[res_label] = path
                     print(f"Download complete via Aria2c: {path}")
             else:
-                print("❌ Sniffer failed to catch the media link.")
+                print("❌ Sniffer failed to catch the media link. (Bot protection might still be active or the link requires manual captcha).")
 
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
