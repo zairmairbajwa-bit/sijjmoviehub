@@ -3,7 +3,7 @@ name: SijjMoviesHub Mp4moviez Scraper
 on:
   workflow_dispatch: 
   schedule:
-    - cron: '0 */4 * * *' 
+    - cron: '0 */3 * * *' 
 
 jobs:
   scrape:
@@ -11,32 +11,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bot_id: [1, 2, 3, 4]
+        bot_id: [1, 2, 3, 4] 
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # AI Vision (Pillow aur pytesseract) install karein
-          pip install pytesseract Pillow
-          # Playwright aur Linux libraries
-          playwright install --with-deps chromium
           sudo apt-get update
-          sudo apt-get install -y aria2 tesseract-ocr
+          sudo apt-get install -y aria2
+          pip install requests internetarchive
 
-      - name: Run Playwright Bot
-        # Yahan '-u' lagaya hai taake logs live show hon!
-        run: python -u archive_bot.py
+      - name: Run Scraper Bot
         env:
           BOT_ID: ${{ matrix.bot_id }}
-          IA_ACCESS: ${{ secrets.IA_ACCESS }}
-          IA_SECRET: ${{ secrets.IA_SECRET }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
+          IA_ACCESS_1: ${{ secrets.IA_ACCESS_1 }}
+          IA_SECRET_1: ${{ secrets.IA_SECRET_1 }}
+          IA_ACCESS_2: ${{ secrets.IA_ACCESS_2 }}
+          IA_SECRET_2: ${{ secrets.IA_SECRET_2 }}
+          IA_ACCESS_3: ${{ secrets.IA_ACCESS_3 }}
+          IA_SECRET_3: ${{ secrets.IA_SECRET_3 }}
+          IA_ACCESS_4: ${{ secrets.IA_ACCESS_4 }}
+          IA_SECRET_4: ${{ secrets.IA_SECRET_4 }}
+        run: |
+          python archive_bot.py
