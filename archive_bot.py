@@ -121,11 +121,13 @@ def download_with_aria2(url, work_dir, referer_url):
         print(f"Aria2 download failed: {e}")
     return None
 
-async def get_movies_from_section(page, section_url):
+async def get_movies_from_front_page(page):
+    """Directly scan the Front Page for all movie links mentioned in updates and lists"""
+    print(f"Scanning Front Page for Movies: {BASE_DOMAIN}")
     movie_pages = []
+    
     try:
-        print(f"Scanning Section Folder: {section_url}")
-        await page.goto(section_url, timeout=60000, wait_domcontentloaded=True)
+        await page.goto(BASE_DOMAIN, timeout=60000)
         await page.wait_for_timeout(3000)
         
         links = await page.locator("a").all()
@@ -133,26 +135,19 @@ async def get_movies_from_section(page, section_url):
             href = await link.get_attribute("href")
             if href:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if abs_url.endswith(".html"):
+                # Front page par movie pages usually .html par end hote hain ya /movie/ mein hote hain
+                if abs_url.endswith(".html") and not any(skip in abs_url.lower() for skip in ['category', 'contact', 'disclaimer', 'dmca', 'index']):
                     if abs_url not in movie_pages:
                         movie_pages.append(abs_url)
     except Exception as e:
-        print(f"Section scan error: {e}")
+        print(f"Front page scan error: {e}")
         
     return movie_pages
 
 async def run_bot():
-    print(f"Starting FilmyZilla Direct Folder Bot ID: {BOT_ID}")
+    print(f"Starting FilmyZilla Front Page Direct Bot ID: {BOT_ID}")
     completed = 0
     start_time = time.time()
-    
-    # Direct Category URLs based on FilmyZilla structure
-    DIRECT_FOLDERS = [
-        f"{BASE_DOMAIN}/category/3134/hollywood-hindi-dubbed-movies-2026.html",
-        f"{BASE_DOMAIN}/category/3133/bollywood-hindi-movies-2026.html",
-        f"{BASE_DOMAIN}/category/3135/south-indian-hindi-dubbed-movies-2026.html",
-        f"{BASE_DOMAIN}/category/2900/hollywood-hindi-dubbed-movies-2025.html"
-    ]
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
@@ -162,6 +157,7 @@ async def run_bot():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
+        # 🛡️ POPUP & AD BLOCKER HANDLER
         def handle_popup(new_popup):
             asyncio.create_task(new_popup.close())
         context.on("page", handle_popup)
@@ -173,22 +169,18 @@ async def run_bot():
         except:
             pass
         
-        all_movie_pages = []
-        for sec_url in DIRECT_FOLDERS:
-            if (time.time() - start_time) > 15000: break
-            movies = await get_movies_from_section(page, sec_url)
-            all_movie_pages.extend(movies)
-            
-        unique_movies = list(set(all_movie_pages))
-        print(f"Total unique movies found: {len(unique_movies)}")
+        # Step 1: Get movies directly from Front Page
+        unique_movies = await get_movies_from_front_page(page)
+        print(f"Total movies found directly on Front Page: {len(unique_movies)}")
         
+        # Step 2: Process each movie for 480p, 720p, 1080p
         for m_url in unique_movies:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break 
 
             print(f"\n--- Opening Movie Page: {m_url} ---")
             try:
-                await page.goto(m_url, timeout=60000, wait_domcontentloaded=True)
+                await page.goto(m_url, timeout=60000)
                 await page.wait_for_timeout(3000)
             except:
                 continue
@@ -202,6 +194,7 @@ async def run_bot():
                 print(f"Movie already fully synced in Firebase. Skipping.")
                 continue
             
+            # Extract resolution links (480p, 720p, 1080p)
             res_links = {}
             links = await page.locator("a").all()
             for link in links:
@@ -222,13 +215,15 @@ async def run_bot():
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
+            # Download each resolution
             for res_label, download_page_url in res_links.items():
                 print(f"Processing {res_label} from: {download_page_url}")
                 try:
                     dl_page = await context.new_page()
-                    await dl_page.goto(download_page_url, timeout=60000, wait_domcontentloaded=True)
+                    await dl_page.goto(download_page_url, timeout=60000)
                     await dl_page.wait_for_timeout(3000)
                     
+                    # Target Server 4 or Server 3 for direct download
                     server_links = []
                     s_anchors = await dl_page.locator("a").all()
                     for sa in s_anchors:
@@ -240,7 +235,7 @@ async def run_bot():
                     
                     direct_file_url = None
                     if server_links:
-                        target_srv = server_links[-1]
+                        target_srv = server_links[-1] # Server 4 / direct link
                         print(f"Clicking server download link: {target_srv}")
                         
                         async with dl_page.expect_navigation(timeout=15000):
@@ -273,7 +268,7 @@ async def run_bot():
             shutil.rmtree(wd, ignore_errors=True)
                 
         await browser.close()
-    print("FilmyZilla Bot run completed.")
+    print("FilmyZilla Front Page Bot run completed.")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
