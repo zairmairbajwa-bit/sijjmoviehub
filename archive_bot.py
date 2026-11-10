@@ -185,7 +185,7 @@ async def human_click(page, locator):
         await locator.click(delay=150)
 
 # ==========================================
-# 🧠 "SHOOT ON SIGHT" AI OCR CAPTCHA SOLVER 
+# 🧠 ADVANCED IMAGE PROCESSING CAPTCHA SOLVER
 # ==========================================
 async def try_solve_captcha(target_page):
     try:
@@ -193,46 +193,66 @@ async def try_solve_captcha(target_page):
         
         async def process_frame(frame):
             try:
-                # Sirf HTML elements check karo, URL ya Text ka wait na karo!
-                img_loc = frame.locator("img").first
                 input_loc = frame.locator("input[type='text']").first
                 btn_loc = frame.locator("input[type='submit'], button, input[value='Continue'], input[type='button']").first
                 
-                # Agar Image aur Input dono ek hi frame mein maujood hain aur visible hain
-                if await img_loc.count() > 0 and await input_loc.count() > 0 and await btn_loc.count() > 0:
-                    if await input_loc.is_visible():
-                        print(f"🚨 [CAPTCHA] Suspicious elements found in Frame: {frame.url[:60]}...")
-                        print("📸 [CAPTCHA] Capturing image for AI...")
-                        
-                        await img_loc.wait_for(state="visible", timeout=3000)
-                        img_bytes = await img_loc.screenshot()
-                        img = Image.open(io.BytesIO(img_bytes)).convert('L')
-                        
-                        # Tesseract se numbers parhna
-                        text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
-                        num = "".join(filter(str.isdigit, text))
-                        
-                        # Captcha aam taur par kam az kam 3-4 digits ka hota hai
-                        if num and len(num) >= 3:
-                            print(f"🤖 [CAPTCHA] AI Vision extracted numbers: {num}")
-                            await input_loc.fill(num)
-                            await btn_loc.click()
-                            print("✅ [CAPTCHA] Submitted! Waiting for redirect...")
-                            await target_page.wait_for_timeout(5000)
-                            return True
-                        else:
-                            print("❌ [CAPTCHA] AI found image but no valid numbers detected.")
+                # Agar Input box aur Button mil jayein
+                if await input_loc.count() > 0 and await btn_loc.count() > 0 and await input_loc.is_visible():
+                    print(f"🚨 [CAPTCHA] Suspicious elements found in Frame: {frame.url[:60]}...")
+                    
+                    # Frame mein mojood SAARI tasveeron (images) ko bari bari check karo
+                    all_imgs = await frame.locator("img").all()
+                    
+                    for img_loc in all_imgs:
+                        try:
+                            box = await img_loc.bounding_box()
+                            # Chotay icons (jaise 10x10) ko ignore karo, captcha thora bara hota hai (eg. 100x40)
+                            if box and box['width'] > 30 and box['height'] > 15:
+                                print(f"📸 [CAPTCHA] Analyzing image (Size: {int(box['width'])}x{int(box['height'])})...")
+                                
+                                await img_loc.scroll_into_view_if_needed()
+                                await img_loc.wait_for(state="visible", timeout=3000)
+                                img_bytes = await img_loc.screenshot()
+                                
+                                # --- 🪄 JADU: IMAGE ENHANCEMENT (HACKER TRICKS) ---
+                                img = Image.open(io.BytesIO(img_bytes)).convert('L') # 1. Grayscale
+                                
+                                # 2. Upscale (3x Bada karna taake OCR asani se parhe)
+                                img = img.resize((img.width * 3, img.height * 3), Image.Resampling.LANCZOS)
+                                
+                                # 3. Binarization / Thresholding (Background kachra khatam, text pure black)
+                                threshold = 140
+                                img = img.point(lambda p: 255 if p > threshold else 0)
+                                # --------------------------------------------------
+                                
+                                # OCR se parhna (Sirf Numbers ki ijazat hai)
+                                text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
+                                num = "".join(filter(str.isdigit, text))
+                                
+                                # Captcha kam az kam 3 digits ka zaroor hota hai
+                                if num and len(num) >= 3:
+                                    print(f"🤖 [CAPTCHA] AI Vision Extracted Pure Numbers: {num}")
+                                    await input_loc.fill(num)
+                                    await target_page.wait_for_timeout(500) # Insaan ki tarah thora thehar ke
+                                    await btn_loc.click()
+                                    print("✅ [CAPTCHA] Submitted! Waiting for redirect to real movie...")
+                                    await target_page.wait_for_timeout(5000)
+                                    return True
+                        except Exception:
+                            continue
+                            
+                    print("❌ [CAPTCHA] AI checked all images but no valid numbers detected.")
             except Exception:
                 pass
             return False
 
-        # Har frame check karo (Main page bhi aur chhupi hui iframes bhi)
+        # Har frame (khirki) ko scan karo
         for frame in target_page.frames:
             if await process_frame(frame): 
                 return True
                     
     except Exception as e:
-        print(f"💥 [CAPTCHA ERROR] Main function error: {str(e)}")
+        pass
         
     return False
 
@@ -243,7 +263,7 @@ async def run_bot():
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
         2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
         3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
-        4: "url?id=32"
+        4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
     }
     
     target_url = BOT_DIRECT_URLS.get(BOT_ID, BOT_DIRECT_URLS[1])
