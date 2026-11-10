@@ -9,20 +9,19 @@ import internetarchive as ia
 import shutil
 
 # === SECURE CREDENTIALS ===
-TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
-FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.firebaseio.com")
+# 💡 FIX: "or" laga diya taake agar GitHub khali secret bheje toh automatically default key use ho!
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
+FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
 BASE_DOMAIN = "https://www.filmyzilla82.com"
 
-BOT_ID = int(os.getenv("BOT_ID", "1"))
-
-# 💡 FIX: Har bot apna apna secret uthayega (e.g. IA_ACCESS_1, IA_ACCESS_2)
+BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 IA_ACCESS = os.getenv(f"IA_ACCESS_{BOT_ID}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{BOT_ID}", "").strip()
 
 MAX_MOVIES_PER_RUN = 3
 TOTAL_BOTS = 4
 
-# GLOBAL SESSION
+# GLOBAL SESSION (Untouched - For Cloudflare Bypass)
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -55,19 +54,43 @@ def search_tmdb_from_title(raw_title):
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
-    if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category', 'series']):
+    # 💡 FIX: 'series' wala skip hata diya taake TV shows bhi mil sakein
+    if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category']):
         return None
         
     print(f"[TMDB] Searching title on TMDB: '{clean}'")
-    url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean)}&language=hi"
+    
+    # 💡 FIX: search/movie ki jagah search/multi laga diya (For both Movies & TV Series)
+    url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean)}&language=hi"
     try:
-        res = requests.get(url, timeout=10).json()
-        results = res.get("results", [])
-        if results:
-            print(f"[TMDB] Match Found! {results[0].get('title')} ({results[0].get('release_date')})")
-            return results[0]
+        res = requests.get(url, timeout=10)
+        
+        # Agar API key ka masla hua toh error print hoga, chhupega nahi!
+        if res.status_code != 200:
+            print(f"❌ TMDB API Error: {res.status_code} - {res.text}")
+            return None
+            
+        results = res.json().get("results", [])
+        
+        # Sirf Movies aur TV shows filter karo
+        valid_results = [r for r in results if r.get("media_type") in ["movie", "tv"]]
+        
+        if valid_results:
+            match = valid_results[0]
+            # TV shows mein 'name' hota hai aur movies mein 'title'
+            t = match.get('title') or match.get('name', 'Unknown')
+            d = match.get('release_date') or match.get('first_air_date', '')
+            print(f"[TMDB] Match Found! {t} ({d})")
+            
+            # Universal format for database
+            match['title'] = t
+            match['release_date'] = d
+            return match
+        else:
+            print(f"❌ No match found on TMDB for '{clean}'")
+            
     except Exception as e:
-        pass
+        print(f"❌ TMDB Exception: {e}")
     return None
 
 def upload_to_archive_and_sync(meta, video_paths):
@@ -94,7 +117,7 @@ def upload_to_archive_and_sync(meta, video_paths):
 
     print(f"Uploading {len(files_to_upload)} files to Archive.org...")
     
-    # 💡 FIX: Try-Except taake bot crash na ho agar upload mein masla aaye
+    # Crash-proof upload
     try:
         r = ia.upload(
             ident, files=files_to_upload, 
@@ -120,7 +143,7 @@ def upload_to_archive_and_sync(meta, video_paths):
 
 def download_with_aria2(url, work_dir, referer_url):
     print(f"Step 5: Aria2c Downloading REAL Video File (Balanced Mode) -> {url}")
-    # 4 connections taake speed achi mile aur ban na ho
+    # 4 connections (Untouched - Yeh best speed de raha tha)
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", "-j", "4", 
@@ -246,6 +269,7 @@ def run_bot():
                 print(f"❌ Failed download step for {res_label}: {e}")
 
         if downloaded_paths:
+            # Universal fallback incase TV series properties are slightly different
             title = tmdb_data.get("title", "Untitled")
             meta = {
                 "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
