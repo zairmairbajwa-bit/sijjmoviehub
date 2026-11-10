@@ -185,44 +185,51 @@ async def human_click(page, locator):
         await locator.click(delay=150)
 
 # ==========================================
-# 🧠 AI OCR CAPTCHA SOLVER (Jadoo Yahan Hai)
+# 🧠 AI OCR CAPTCHA SOLVER (DEBUG MODE)
 # ==========================================
 async def try_solve_captcha(target_page):
     try:
         if target_page.is_closed(): return False
         
-        # Agar URL mein auralogicpine ho ya captcha ka text nazar aaye
-        if "auralogicpine" in target_page.url or await target_page.locator("text=Please type the numbers").count() > 0:
-            print(f"🚨 CAPTCHA Detected on: {target_page.url}")
+        url = target_page.url.lower()
+        
+        # Check if the current page is the captcha page
+        if "auralogicpine" in url or "filter" in url or await target_page.locator("text=Please type the numbers").count() > 0:
+            print(f"🚨 [CAPTCHA] Detected on: {target_page.url}")
+            
+            # Wait for elements to be visible before acting
+            await target_page.wait_for_load_state("networkidle", timeout=5000)
             
             img_loc = target_page.locator("img").first
             input_loc = target_page.locator("input[type='text']").first
             btn_loc = target_page.locator("input[type='submit'], button, input[value='Continue']").first
             
             if await img_loc.count() > 0 and await input_loc.count() > 0:
-                print("📸 Capturing Captcha Image for AI...")
-                img_bytes = await img_loc.screenshot()
+                print("📸 [CAPTCHA] Elements found! Capturing image...")
+                await img_loc.wait_for(state="visible", timeout=5000)
                 
-                # Image ko saaf aur Black & White karna taake AI asani se parh le
+                img_bytes = await img_loc.screenshot()
                 img = Image.open(io.BytesIO(img_bytes)).convert('L')
                 
-                # Tesseract OCR se numbers extract karna
                 text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
                 num = "".join(filter(str.isdigit, text))
                 
                 if num:
-                    print(f"🤖 AI Vision ne numbers parh liye: {num}")
+                    print(f"🤖 [CAPTCHA] AI Vision extracted numbers: {num}")
                     await input_loc.fill(num)
                     await btn_loc.click()
-                    print("✅ Captcha Submitted! Waiting for original link...")
-                    await target_page.wait_for_timeout(4000)
+                    print("✅ [CAPTCHA] Submitted! Waiting for redirect...")
+                    await target_page.wait_for_timeout(5000)
                     return True
                 else:
-                    print("❌ AI failed to read numbers from image.")
+                    print("❌ [CAPTCHA] AI failed to read numbers from the image.")
+            else:
+                print("⚠️ [CAPTCHA] Could not find 'img' or 'input' tags on this page.")
     except Exception as e:
-        pass
+        # Pata chale ga ke kahan phat raha hai code
+        print(f"💥 [CAPTCHA ERROR] Failed to process captcha: {str(e)}")
+        
     return False
-
 
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
@@ -354,7 +361,7 @@ async def run_bot():
                 # Check main page
                 await try_solve_captcha(page)
                 
-                # Check if captcha opened in a popup
+                # Check if captcha opened in any new popup tabs
                 for p in popups:
                     if not p.is_closed():
                         await try_solve_captcha(p)
