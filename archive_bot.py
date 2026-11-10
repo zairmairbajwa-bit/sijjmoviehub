@@ -22,7 +22,7 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
 FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.firebaseio.com")
 BASE_DOMAIN = "https://www.mp4moviez.computer"
 
-# Yahan testing ke liye aapki direct API key laga di hai!
+# Aapki Direct API Key
 OCR_API_KEY = "K8787437980056088957"
 
 # === BOT SETTINGS ===
@@ -166,7 +166,7 @@ async def get_paginated_movies(page, start_url):
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
-# 🤖 THE "HUMAN-LIKE" CLICKING (Double-Tap Trick for Ad Overlays)
+# 🤖 DOUBLE-TAP CLICK (Ads bypass karne ke liye)
 async def human_click(page, locator):
     try:
         await locator.scroll_into_view_if_needed()
@@ -176,72 +176,55 @@ async def human_click(page, locator):
             x = box['x'] + (box['width'] / 2) + random.uniform(-10, 10)
             y = box['y'] + (box['height'] / 2) + random.uniform(-3, 3)
             
-            # Mouse ko button par lana
             await page.mouse.move(x, y, steps=random.randint(10, 25))
-            await page.wait_for_timeout(random.randint(200, 600))
+            await page.wait_for_timeout(random.randint(200, 400))
             
-            # --- 1st Click (Fake Click to clear invisible Ad overlays) ---
+            # 1st Click (Fake tap for ads)
             await page.mouse.down()
-            await page.wait_for_timeout(random.randint(50, 150))
+            await page.wait_for_timeout(50)
             await page.mouse.up()
-            print("👤 Fake tap executed to clear Ad overlays...")
             
-            # Thora intezar taake ad naye tab mein khul jaye
-            await page.wait_for_timeout(random.randint(600, 1200))
+            await page.wait_for_timeout(800)
             
-            # --- 2nd Click (Real Click on the actual download button) ---
+            # 2nd Click (Real download click)
             await page.mouse.down()
-            await page.wait_for_timeout(random.randint(50, 150))
+            await page.wait_for_timeout(50)
             await page.mouse.up()
-            print("👤 Real Human-like click executed perfectly.")
-            
+            print("👤 Double-tap click executed successfully.")
         else:
-            # Agar bounding box fail ho jaye toh normal click (with force to pierce ads)
-            await locator.click(delay=random.randint(100, 250), force=True)
-            print("👤 Fallback click executed.")
+            await locator.click(delay=150, force=True)
     except Exception as e:
         await locator.click(delay=150, force=True)
 
 # ==========================================
-# 🚀 ONLINE AI API CAPTCHA SOLVER (OCR.SPACE)
+# 🚀 ONLINE AI API CAPTCHA SOLVER
 # ==========================================
 def solve_captcha_api(img_bytes):
     try:
-        if not OCR_API_KEY:
-            print("❌ [API] API Key missing in code!")
-            return None
-
-        # Convert image to base64 format for the API
+        if not OCR_API_KEY: return None
         base64_img = "data:image/png;base64," + base64.b64encode(img_bytes).decode('utf-8')
         
         print("🌐 [API] Sending Captcha image to Online AI OCR...")
         payload = {
             'apikey': OCR_API_KEY,
             'base64Image': base64_img,
-            'OCREngine': '2', # Engine 2 is best for numbers and noisy images
+            'OCREngine': '2',
             'scale': 'true'
         }
-        
-        # Requesting OCR API
         res = requests.post('https://api.ocr.space/parse/image', data=payload, timeout=15)
         result = res.json()
         
         if "ParsedResults" in result and len(result["ParsedResults"]) > 0:
             parsed_text = result["ParsedResults"][0].get("ParsedText", "")
             print(f"📝 [API] Raw API Text: {parsed_text.strip()}")
-            
-            # Extract only numbers from the result
             num = "".join(filter(str.isdigit, parsed_text))
             return num
-        else:
-            print(f"❌ [API] API rejected the request. Raw Response: {result}")
-            
     except Exception as e:
         print(f"💥 [API] Request crashed: {str(e)}")
     return None
 
 # ==========================================
-# 🧠 SMART API CAPTCHA SOLVER (Ignores Search Bars & Ads)
+# 🧠 ENHANCED SMART CAPTCHA SOLVER
 # ==========================================
 async def try_solve_captcha(target_page):
     try:
@@ -250,64 +233,52 @@ async def try_solve_captcha(target_page):
         async def process_frame(frame):
             try:
                 url_lower = frame.url.lower()
-                
-                # 🛑 SMART FILTER: Check if it's ACTUALLY a captcha page
                 is_suspicious_url = any(x in url_lower for x in ['auralogicpine', 'filter', 'captcha', 'verify', 'challenge'])
-                has_captcha_text = False
+                has_text = False
                 try:
                     if await frame.locator("text=Please type the numbers").count() > 0:
-                        has_captcha_text = True
+                        has_text = True
                 except: pass
                 
-                # Agar yeh normal Mp4moviez ka page hai aur Captcha ka naam-o-nishan nahi, toh foran wapis jao!
-                if not (is_suspicious_url or has_captcha_text):
+                if not (is_suspicious_url or has_text):
                     return False
 
                 input_loc = frame.locator("input[type='text']").first
                 btn_loc = frame.locator("input[type='submit'], button, input[value='Continue'], input[type='button']").first
                 
                 if await input_loc.count() > 0 and await btn_loc.count() > 0 and await input_loc.is_visible():
-                    print(f"🚨 [CAPTCHA] REAL Captcha found in Frame: {frame.url[:60]}...")
+                    print(f"🚨 [CAPTCHA] REAL Captcha active in Frame: {frame.url[:60]}...")
                     
                     all_imgs = await frame.locator("img").all()
-                    
                     for img_loc in all_imgs:
                         try:
                             box = await img_loc.bounding_box()
-                            # Captcha image size is usually specific, ignoring huge ad banners (>300 height)
                             if box and box['width'] > 30 and box['height'] > 15 and box['height'] < 250:
                                 print(f"📸 [CAPTCHA] Capturing image (Size: {int(box['width'])}x{int(box['height'])})...")
-                                
                                 await img_loc.scroll_into_view_if_needed()
-                                await img_loc.wait_for(state="visible", timeout=3000)
                                 img_bytes = await img_loc.screenshot()
                                 
                                 num = solve_captcha_api(img_bytes)
-                                
                                 if num and len(num) >= 3:
-                                    print(f"🤖 [CAPTCHA] Online AI Extracted Numbers: {num}")
+                                    print(f"🤖 [CAPTCHA] Solved! Numbers: {num}")
                                     await input_loc.fill(num)
-                                    await target_page.wait_for_timeout(500)
+                                    await target_page.wait_for_timeout(300)
                                     await btn_loc.click()
-                                    print("✅ [CAPTCHA] Submitted! Waiting for redirect...")
-                                    await target_page.wait_for_timeout(5000)
+                                    print("✅ [CAPTCHA] Submitted successfully!")
+                                    await target_page.wait_for_timeout(4000)
                                     return True
-                                else:
-                                    print("❌ [CAPTCHA] Online AI could not find valid numbers.")
-                        except Exception:
+                        except:
                             continue
-            except Exception:
+            except:
                 pass
             return False
 
         for frame in target_page.frames:
             if await process_frame(frame): 
                 return True
-                    
-    except Exception as e:
+    except:
         pass
     return False
-
 
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
@@ -320,8 +291,6 @@ async def run_bot():
     }
     
     target_url = BOT_DIRECT_URLS.get(BOT_ID, BOT_DIRECT_URLS[1])
-    print(f"Bot {BOT_ID} Target URL: {target_url}")
-    
     completed = 0
     start_time = time.time()
     
@@ -351,14 +320,11 @@ async def run_bot():
                 continue
             
             raw_title = await page.title()
-            
             tmdb_data = search_tmdb_from_title(raw_title)
-            if not tmdb_data:
-                continue
+            if not tmdb_data: continue
                 
             tmdb_id = str(tmdb_data["id"])
-            if is_already_in_firebase(tmdb_id):
-                continue
+            if is_already_in_firebase(tmdb_id): continue
             
             all_links = await page.locator("a").all()
             target_link = None
@@ -371,9 +337,7 @@ async def run_bot():
                 except:
                     continue
                     
-                if not href or href == "#": 
-                    continue
-                
+                if not href or href == "#": continue
                 text_lower = text.lower() if text else ""
                 if "jio users" in text_lower or "low quality" in text_lower: continue
                     
@@ -387,15 +351,13 @@ async def run_bot():
                     elif "480" in text_lower:
                         if not res_label: target_link = link; res_label = "url_480p"
 
-            if not target_link:
-                continue
+            if not target_link: continue
                 
             wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
             stolen_media_url = None
-            
             async def sniff_response(response):
                 nonlocal stolen_media_url
                 if stolen_media_url: return
@@ -408,11 +370,11 @@ async def run_bot():
 
                     if "video/" in content_type or "application/octet-stream" in content_type or "application/x-download" in content_type:
                         stolen_media_url = response.url
-                        print(f"🕵️ [SNIFFER] Asli media link chura liya (Type: {content_type}): {response.url}")
+                        print(f"🕵️ [SNIFFER] Media link caught: {response.url}")
                     elif ('?'.split(url)[0].endswith('.mp4') or '?'.split(url)[0].endswith('.mkv')):
                         stolen_media_url = response.url
-                        print(f"🕵️ [SNIFFER] Asli media link chura liya (Clean Extension): {response.url}")
-                except Exception:
+                        print(f"🕵️ [SNIỢ] Media link caught (Clean): {response.url}")
+                except:
                     pass
 
             context.on("response", sniff_response)
@@ -422,15 +384,14 @@ async def run_bot():
                 popups.append(new_page)
             context.on("page", handle_new_tab)
 
-            print(f"Performing HUMAN-LIKE click for {res_label} and waiting for Filtered Sniffer...")
+            print(f"Clicking for {res_label} and hunting Captcha...")
             await human_click(page, target_link)
             
-            for _ in range(25):
-                if stolen_media_url:
-                    break
+            # Extended Loop (40 seconds) to ensure captcha solving and media snatching
+            for _ in range(40):
+                if stolen_media_url: break
                 
                 await try_solve_captcha(page)
-                
                 for p in popups:
                     if not p.is_closed():
                         await try_solve_captcha(p)
@@ -444,13 +405,12 @@ async def run_bot():
                 except: pass
 
             if stolen_media_url:
-                print(f"🎯 Sniffer Success! Handing over pure link to Aria2c...")
+                print(f"🎯 Handing over link to Aria2c...")
                 path = download_with_aria2(stolen_media_url, wd, m_url)
                 if path:
                     downloaded_paths[res_label] = path
-                    print(f"Download complete via Aria2c: {path}")
             else:
-                print("❌ Sniffer failed to catch the media link.")
+                print("❌ Sniffer failed to catch media link.")
 
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
