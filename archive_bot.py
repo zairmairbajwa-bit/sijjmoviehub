@@ -20,8 +20,8 @@ BOT_ID = int(os.getenv("BOT_ID", "1"))
 IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
 
-MAX_MOVIES_PER_RUN = 5
-TOTAL_BOTS = 4  # Aapke total GitHub Matrix bots
+MAX_MOVIES_PER_RUN = 3
+TOTAL_BOTS = 4
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -122,7 +122,7 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 async def run_bot():
-    print(f"Starting FilmyZilla Partitioned Bot ID: {BOT_ID}")
+    print(f"Starting FilmyZilla Direct Download Bot ID: {BOT_ID}")
     completed = 0
     start_time = time.time()
     
@@ -130,7 +130,6 @@ async def run_bot():
     all_movie_pages = []
     
     try:
-        print(f"Fetching Front Page: {BASE_DOMAIN}")
         response = requests.get(BASE_DOMAIN, headers=headers, timeout=20)
         if response.status_code == 200:
             hrefs = re.findall(r'href=["\'](.*?)["\']', response.text)
@@ -142,9 +141,6 @@ async def run_bot():
     except Exception as e:
         print(f"Front page regex error: {e}")
 
-    print(f"Total movies found from Front Page: {len(all_movie_pages)}")
-    
-    # ✂️ SMART PARTITIONING: Har bot sirf apne hissay ki movies uthayega (e.g. Bot 1, Bot 2, Bot 3, Bot 4)
     chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS)
     start_idx = (BOT_ID - 1) * chunk_size
     end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
@@ -182,7 +178,8 @@ async def run_bot():
             try:
                 await page.goto(m_url, timeout=60000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
-            except:
+            except Exception as e:
+                print(f"Failed to load movie page: {e}")
                 continue
             
             raw_title = await page.title()
@@ -194,6 +191,7 @@ async def run_bot():
                 print(f"Movie already fully synced in Firebase. Skipping.")
                 continue
             
+            # Robust Resolution Links Extractor
             res_links = {}
             links = await page.locator("a").all()
             for link in links:
@@ -203,13 +201,17 @@ async def run_bot():
                     if text and href:
                         t_low = text.lower()
                         abs_href = urllib.parse.urljoin(BASE_DOMAIN, href)
-                        if "480p" in t_low: res_links["url_480p"] = abs_href
-                        elif "720p" in t_low: res_links["url_720p"] = abs_href
-                        elif "1080p" in t_low: res_links["url_1080p"] = abs_href
+                        if "480p" in t_low and "url_480p" not in res_links: res_links["url_480p"] = abs_href
+                        elif "720p" in t_low and "url_720p" not in res_links: res_links["url_720p"] = abs_href
+                        elif "1080p" in t_low and "url_1080p" not in res_links: res_links["url_1080p"] = abs_href
                 except:
                     continue
 
             print(f"Found Resolutions for {tmdb_data.get('title')}: {list(res_links.keys())}")
+            if not res_links:
+                print("No resolutions found on this page, skipping.")
+                continue
+
             wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
@@ -228,7 +230,7 @@ async def run_bot():
                         s_href = await sa.get_attribute("href")
                         if s_text and s_href:
                             s_low = s_text.lower()
-                            if 'server 4' in s_low or 'server 3' in s_low or 'server' in s_low:
+                            if 'server 4' in s_low or 'server 3' in s_low or 'server' in s_low or 'download' in s_low:
                                 server_links.append((s_low, urllib.parse.urljoin(dl_page.url, s_href)))
                     
                     direct_file_url = None
