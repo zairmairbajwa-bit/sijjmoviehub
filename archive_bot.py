@@ -14,13 +14,15 @@ FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.fire
 BASE_DOMAIN = "https://www.filmyzilla82.com"
 
 BOT_ID = int(os.getenv("BOT_ID", "1"))
-IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
-IA_SECRET = os.getenv("IA_SECRET", "").strip()
+
+# 💡 FIX: Har bot apna apna secret uthayega (e.g. IA_ACCESS_1, IA_ACCESS_2)
+IA_ACCESS = os.getenv(f"IA_ACCESS_{BOT_ID}", "").strip()
+IA_SECRET = os.getenv(f"IA_SECRET_{BOT_ID}", "").strip()
 
 MAX_MOVIES_PER_RUN = 3
 TOTAL_BOTS = 4
 
-# GLOBAL SESSION (Cookies aur tokens ko save rakhne ke liye)
+# GLOBAL SESSION
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -87,26 +89,38 @@ def upload_to_archive_and_sync(meta, video_paths):
             files_to_upload.append(tp)
             firebase_links[res_label] = f"https://archive.org/download/{ident}/{cf}"
 
-    if not files_to_upload: return False
+    if not files_to_upload: 
+        return False
 
-    print(f"Uploading files to Archive.org...")
-    r = ia.upload(
-        ident, files=files_to_upload, 
-        metadata={"title": f"{meta['title']} ({release_year})", "mediatype": "movies"}, 
-        access_key=IA_ACCESS, secret_key=IA_SECRET
-    )
+    print(f"Uploading {len(files_to_upload)} files to Archive.org...")
     
-    if r and r[0].status_code == 200:
-        meta.update(firebase_links)
-        meta["stream_url"] = firebase_links.get("url_720p") or firebase_links.get("url_480p") or firebase_links.get("url_1080p")
-        meta["category"] = "Latest Updates"
-        requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
-        return True
-    return False
+    # 💡 FIX: Try-Except taake bot crash na ho agar upload mein masla aaye
+    try:
+        r = ia.upload(
+            ident, files=files_to_upload, 
+            metadata={"title": f"{meta['title']} ({release_year})", "mediatype": "movies"}, 
+            access_key=IA_ACCESS, secret_key=IA_SECRET
+        )
+        
+        if r and r[0].status_code == 200:
+            meta.update(firebase_links)
+            meta["stream_url"] = firebase_links.get("url_720p") or firebase_links.get("url_480p") or firebase_links.get("url_1080p")
+            meta["category"] = "Latest Updates"
+            
+            requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
+            print(f"✅ Firebase sync successful!")
+            return True
+        else:
+            print(f"❌ Archive.org Upload Failed! Status: {r[0].status_code if r else 'No Response'}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR during Archive.org Upload: {e}")
+        return False
 
 def download_with_aria2(url, work_dir, referer_url):
     print(f"Step 5: Aria2c Downloading REAL Video File (Balanced Mode) -> {url}")
-    # Balanced mode: 4 connections taake speed achi mile aur ban na ho
+    # 4 connections taake speed achi mile aur ban na ho
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", "-j", "4", 
