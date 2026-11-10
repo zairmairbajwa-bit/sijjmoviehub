@@ -9,7 +9,6 @@ import internetarchive as ia
 import shutil
 
 # === SECURE CREDENTIALS ===
-# 💡 FIX: "or" laga diya taake agar GitHub khali secret bheje toh automatically default key use ho!
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
 BASE_DOMAIN = "https://www.filmyzilla82.com"
@@ -21,7 +20,7 @@ IA_SECRET = os.getenv(f"IA_SECRET_{BOT_ID}", "").strip()
 MAX_MOVIES_PER_RUN = 3
 TOTAL_BOTS = 4
 
-# GLOBAL SESSION (Untouched - For Cloudflare Bypass)
+# GLOBAL SESSION
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -54,35 +53,26 @@ def search_tmdb_from_title(raw_title):
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
-    # 💡 FIX: 'series' wala skip hata diya taake TV shows bhi mil sakein
     if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category']):
         return None
         
     print(f"[TMDB] Searching title on TMDB: '{clean}'")
-    
-    # 💡 FIX: search/movie ki jagah search/multi laga diya (For both Movies & TV Series)
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean)}&language=hi"
     try:
         res = requests.get(url, timeout=10)
-        
-        # Agar API key ka masla hua toh error print hoga, chhupega nahi!
         if res.status_code != 200:
             print(f"❌ TMDB API Error: {res.status_code} - {res.text}")
             return None
             
         results = res.json().get("results", [])
-        
-        # Sirf Movies aur TV shows filter karo
         valid_results = [r for r in results if r.get("media_type") in ["movie", "tv"]]
         
         if valid_results:
             match = valid_results[0]
-            # TV shows mein 'name' hota hai aur movies mein 'title'
             t = match.get('title') or match.get('name', 'Unknown')
             d = match.get('release_date') or match.get('first_air_date', '')
             print(f"[TMDB] Match Found! {t} ({d})")
             
-            # Universal format for database
             match['title'] = t
             match['release_date'] = d
             return match
@@ -93,73 +83,76 @@ def search_tmdb_from_title(raw_title):
         print(f"❌ TMDB Exception: {e}")
     return None
 
-def upload_to_archive_and_sync(meta, video_paths):
-    tmdb_id = str(meta["id"])
-    release_year = meta.get("release_date", "2026")[:4]
-    ident = f"sijjhub-media-{tmdb_id}-{int(time.time())}"
+# 💡 NEW FIX: Yeh function ab ek waqt mein sirf 1 resolution upload karega!
+def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path):
+    ext = os.path.splitext(f_path)[1].lower()
+    if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
+    cf = f"{clean_filename(meta['title'])}_{release_year}_{res_label}_{tmdb_id}{ext}"
+    tp = os.path.join(os.path.dirname(f_path), cf)
     
-    files_to_upload = []
-    firebase_links = {}
-    
-    for res_label, vp in video_paths.items():
-        if vp and os.path.exists(vp):
-            ext = os.path.splitext(vp)[1].lower()
-            if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
-            cf = f"{clean_filename(meta['title'])}_{release_year}_{res_label}_{tmdb_id}{ext}"
-            tp = os.path.join(os.path.dirname(vp), cf)
-            if vp != tp:
-                shutil.move(vp, tp)
-            files_to_upload.append(tp)
-            firebase_links[res_label] = f"https://archive.org/download/{ident}/{cf}"
-
-    if not files_to_upload: 
-        return False
-
-    print(f"Uploading {len(files_to_upload)} files to Archive.org...")
-    
-    # Crash-proof upload
+    if f_path != tp:
+        shutil.move(f_path, tp)
+        
+    print(f"Uploading {res_label} file to Archive.org immediately...")
     try:
         r = ia.upload(
-            ident, files=files_to_upload, 
+            ident, files=[tp], 
             metadata={"title": f"{meta['title']} ({release_year})", "mediatype": "movies"}, 
             access_key=IA_ACCESS, secret_key=IA_SECRET
         )
         
         if r and r[0].status_code == 200:
-            meta.update(firebase_links)
-            meta["stream_url"] = firebase_links.get("url_720p") or firebase_links.get("url_480p") or firebase_links.get("url_1080p")
-            meta["category"] = "Latest Updates"
+            archive_link = f"https://archive.org/download/{ident}/{cf}"
+            meta[f"url_{res_label}"] = archive_link
+            meta["stream_url"] = archive_link
             
             requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
-            print(f"✅ Firebase sync successful!")
+            print(f"✅ {res_label} Uploaded & Firebase Synced Successfully!")
+            
+            # 💡 SMART FIX: Upload hote hi file delete kardo taake RAM full na ho!
+            try:
+                os.remove(tp)
+            except: pass
+            
             return True
         else:
-            print(f"❌ Archive.org Upload Failed! Status: {r[0].status_code if r else 'No Response'}")
+            print(f"❌ Archive.org Upload Failed for {res_label}! Status: {r[0].status_code if r else 'No Response'}")
             return False
             
     except Exception as e:
-        print(f"❌ CRITICAL ERROR during Archive.org Upload: {e}")
+        print(f"❌ CRITICAL ERROR during Archive.org Upload for {res_label}: {e}")
         return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Step 5: Aria2c Downloading REAL Video File (Balanced Mode) -> {url}")
-    # 4 connections (Untouched - Yeh best speed de raha tha)
+    print(f"Step 5: Aria2c Downloading REAL Video File (High Speed Mode) -> {url}")
+    # 💡 Option 1: High speed 4 connections!
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", "-j", "4", 
+        "-c", "--max-tries=5", "--retry-wait=2", 
         "--min-split-size=10M",
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
         "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         url
     ]
-    try:
-        subprocess.run(cmd, check=True, timeout=7200) 
-        for root, dirs, files in os.walk(work_dir):
-            for file in files:
-                if file.lower().endswith((".mp4", ".mkv")) and not file.endswith(".aria2"):
-                    return os.path.join(root, file)
-    except Exception as e:
-        print(f"Aria2 download failed: {e}")
+    
+    for attempt in range(1, 4):
+        try:
+            print(f"--> Download Attempt {attempt}...")
+            subprocess.run(cmd, check=True, timeout=7200)
+            break
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️ Server dropped connection at end. Resuming remaining bytes... (Attempt {attempt}/3)")
+            time.sleep(3)
+        except Exception as e:
+            print(f"Aria2 download failed: {e}")
+            break
+            
+    for root, dirs, files in os.walk(work_dir):
+        for file in files:
+            if file.lower().endswith((".mp4", ".mkv")) and not file.endswith(".aria2"):
+                return os.path.join(root, file)
+                
     return None
 
 def run_bot():
@@ -220,8 +213,19 @@ def run_bot():
 
         wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
         os.makedirs(wd, exist_ok=True)
-        downloaded_paths = {}
+        
+        # 💡 NEW FIX: Yahan ek movie ka folder aur meta set hoga
+        release_year = tmdb_data.get("release_date", "2026")[:4]
+        ident = f"sijjhub-media-{tmdb_id}-{int(time.time())}"
+        title = tmdb_data.get("title", "Untitled")
+        meta = {
+            "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
+            "overview": tmdb_data.get("overview", ""), "release_date": tmdb_data.get("release_date", ""), 
+            "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
+            "hindi_dubbed": True, "category": "Latest Updates"
+        }
 
+        # Ab resolutions ki bari aayegi
         for res_label, resolution_page_url in res_links.items():
             print(f"Step 3: Clicking on Resolution {res_label} -> {resolution_page_url}")
             try:
@@ -259,7 +263,10 @@ def run_bot():
                     if real_mkv_url:
                         print(f"--> Success! Found Real Video Link: {real_mkv_url}")
                         f_path = download_with_aria2(real_mkv_url, wd, final_page_resp.url)
-                        if f_path: downloaded_paths[res_label] = f_path
+                        
+                        if f_path: 
+                            # 💡 DOWNLOAD HOTE HI UPLOAD KAR DO!
+                            upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path)
                     
                     time.sleep(2) 
                 else:
@@ -268,19 +275,7 @@ def run_bot():
             except Exception as e:
                 print(f"❌ Failed download step for {res_label}: {e}")
 
-        if downloaded_paths:
-            # Universal fallback incase TV series properties are slightly different
-            title = tmdb_data.get("title", "Untitled")
-            meta = {
-                "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
-                "overview": tmdb_data.get("overview", ""), "release_date": tmdb_data.get("release_date", ""), 
-                "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
-                "hindi_dubbed": True 
-            }
-            if upload_to_archive_and_sync(meta, downloaded_paths):
-                completed += 1
-                print(f"✅ Movie Uploaded & Synced Successfully!")
-                
+        completed += 1
         shutil.rmtree(wd, ignore_errors=True)
 
     print("Bot run completed.")
