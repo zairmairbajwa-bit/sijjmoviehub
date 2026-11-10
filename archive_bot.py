@@ -57,14 +57,10 @@ def search_tmdb_from_title(raw_title):
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
-    
-    # Random categories ya non-movies ko foran reject karo
     if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category', 'series']):
-        print(f"[TMDB] Skipping non-movie category title: '{clean}'")
         return None
         
     print(f"[TMDB] Searching clean title on TMDB: '{clean}'")
-    
     url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean)}&language=hi"
     try:
         res = requests.get(url, timeout=10).json()
@@ -85,12 +81,13 @@ def upload_to_archive_and_sync(meta, video_paths):
     firebase_links = {}
     
     for res_label, vp in video_paths.items():
-        if vp:
+        if vp and os.path.exists(vp):
             ext = os.path.splitext(vp)[1].lower()
             if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
             cf = f"{clean_filename(meta['title'])}_{release_year}_{res_label}_{tmdb_id}{ext}"
             tp = os.path.join(os.path.dirname(vp), cf)
-            os.rename(vp, tp)
+            if vp != tp:
+                shutil.move(vp, tp)
             files_to_upload.append(tp)
             firebase_links[res_label] = f"https://archive.org/download/{ident}/{cf}"
 
@@ -113,27 +110,6 @@ def upload_to_archive_and_sync(meta, video_paths):
         requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
         return True
     return False
-
-def download_with_aria2(url, work_dir, referer_url):
-    print(f"Starting Aria2c Fast Download: {url}")
-    cmd = [
-        "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
-        "--content-disposition-default-utf8=true",
-        f"--referer={referer_url}",
-        "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        url
-    ]
-    try:
-        subprocess.run(cmd, check=True, timeout=2400) 
-        for root, dirs, files in os.walk(work_dir):
-            for file in files:
-                if file.lower().endswith((".mp4", ".mkv")):
-                    return os.path.join(root, file)
-                elif not file.endswith(".aria2") and not file.lower().endswith(".html"):
-                    return os.path.join(root, file)
-    except Exception as e:
-        print(f"Aria2 download failed: {e}")
-    return None
 
 async def get_paginated_movies(page, start_url):
     current_url = start_url
@@ -166,41 +142,36 @@ async def get_paginated_movies(page, start_url):
                             page_movies.append(abs_url)
 
         all_movie_urls.extend(page_movies)
-        print(f"Total links gathered so far: {len(all_movie_urls)}")
         break 
             
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
-# 🤖 DOUBLE-TAP CLICK
+# 🤖 HUMAN-LIKE HUMAN CLICK WITH DOUBLE TAP
 async def human_click(page, locator):
     try:
         await locator.scroll_into_view_if_needed()
-        await page.wait_for_timeout(random.randint(500, 1200))
+        await page.wait_for_timeout(random.randint(500, 1000))
         box = await locator.bounding_box()
         if box:
-            x = box['x'] + (box['width'] / 2) + random.uniform(-10, 10)
-            y = box['y'] + (box['height'] / 2) + random.uniform(-3, 3)
+            x = box['x'] + (box['width'] / 2) + random.uniform(-5, 5)
+            y = box['y'] + (box['height'] / 2) + random.uniform(-2, 2)
             
-            await page.mouse.move(x, y, steps=random.randint(10, 25))
-            await page.wait_for_timeout(200)
-            
-            # 1st Click (Fake tap for ads)
+            await page.mouse.move(x, y, steps=10)
             await page.mouse.down()
             await page.wait_for_timeout(50)
             await page.mouse.up()
             
-            await page.wait_for_timeout(800)
+            await page.wait_for_timeout(600)
             
-            # 2nd Click (Real download click)
             await page.mouse.down()
             await page.wait_for_timeout(50)
             await page.mouse.up()
             print("👤 Double-tap click executed successfully.")
         else:
-            await locator.click(delay=150, force=True)
+            await locator.click(force=True)
     except Exception as e:
-        await locator.click(delay=150, force=True)
+        await locator.click(force=True)
 
 # ==========================================
 # 🚀 ONLINE AI API CAPTCHA SOLVER
@@ -210,7 +181,6 @@ def solve_captcha_api(img_bytes):
         if not OCR_API_KEY: return None
         base64_img = "data:image/png;base64," + base64.b64encode(img_bytes).decode('utf-8')
         
-        print("🌐 [API] Sending Captcha image to Online AI OCR...")
         payload = {
             'apikey': OCR_API_KEY,
             'base64Image': base64_img,
@@ -222,105 +192,42 @@ def solve_captcha_api(img_bytes):
         
         if "ParsedResults" in result and len(result["ParsedResults"]) > 0:
             parsed_text = result["ParsedResults"][0].get("ParsedText", "")
-            print(f"📝 [API] Raw API Text: {parsed_text.strip()}")
             num = "".join(filter(str.isdigit, parsed_text))
             return num
-    except Exception as e:
-        print(f"💥 [API] Request crashed: {str(e)}")
-    return None
-
-# ==========================================
-# 🧠 SMART CAPTCHA & DIRECT LINK EXTRACTOR
-# ==========================================
-async def try_solve_captcha_and_extract_link(target_page):
-    try:
-        if target_page.is_closed(): return None
-        
-        # 1. Check if direct video link is already in page HTML/HREFs
-        all_anchors = await target_page.locator("a").all()
-        for a in all_anchors:
-            try:
-                href = await a.get_attribute("href")
-                if href:
-                    href_lower = href.lower()
-                    if any(href_lower.endswith(ext) for ext in ['.mp4', '.mkv']) or 'download.php' in href_lower or 'server' in href_lower:
-                        abs_link = urllib.parse.urljoin(target_page.url, href)
-                        if not any(bad in abs_link.lower() for bad in ['javascript', '#', 'contact', 'disclaimer']):
-                            print(f"🎯 [DOM EXTRACTOR] Found direct media/server link: {abs_link}")
-                            return abs_link
-            except:
-                continue
-
-        async def process_frame(frame):
-            try:
-                url_lower = frame.url.lower()
-                is_suspicious_url = any(x in url_lower for x in ['auralogicpine', 'filter', 'captcha', 'verify', 'challenge'])
-                has_text = False
-                try:
-                    if await frame.locator("text=Please type the numbers").count() > 0:
-                        has_text = True
-                except: pass
-                
-                if not (is_suspicious_url or has_text):
-                    # Click valid download buttons inside frames
-                    all_elements = await frame.locator("a, button, input[type='button']").all()
-                    for el in all_elements:
-                        try:
-                            txt = await el.inner_text()
-                            href = await el.get_attribute("href")
-                            if txt:
-                                txt_lower = txt.lower()
-                                if any(skip in txt_lower for skip in ['new hollywood series', 'category', 'home', 'disclaimer']): continue
-                                if any(w in txt_lower for w in ['download file', 'server', 'click here', 'direct', 'fast', 'resumable']):
-                                    if href and not "#" in href:
-                                        print(f"🎯 [AUTO-CLICK] Clicking valid button: {txt.strip()}")
-                                        await el.click(force=True)
-                                        await target_page.wait_for_timeout(3000)
-                                        return True
-                        except:
-                            continue
-                    return False
-
-                input_loc = frame.locator("input[type='text']").first
-                btn_loc = frame.locator("input[type='submit'], button, input[value='Continue'], input[type='button']").first
-                
-                if await input_loc.count() > 0 and await btn_loc.count() > 0 and await input_loc.is_visible():
-                    print(f"🚨 [CAPTCHA] REAL Captcha active in Frame: {frame.url[:60]}...")
-                    
-                    all_imgs = await frame.locator("img").all()
-                    for img_loc in all_imgs:
-                        try:
-                            box = await img_loc.bounding_box()
-                            if box and box['width'] > 30 and box['height'] > 15 and box['height'] < 250:
-                                print(f"📸 [CAPTCHA] Capturing image (Size: {int(box['width'])}x{int(box['height'])})...")
-                                await img_loc.scroll_into_view_if_needed()
-                                img_bytes = await img_loc.screenshot()
-                                
-                                num = solve_captcha_api(img_bytes)
-                                if num and len(num) >= 3:
-                                    print(f"🤖 [CAPTCHA] Solved! Numbers: {num}")
-                                    await input_loc.fill(num)
-                                    await target_page.wait_for_timeout(300)
-                                    await btn_loc.click()
-                                    print("✅ [CAPTCHA] Submitted successfully!")
-                                    await target_page.wait_for_timeout(4000)
-                                    return True
-                        except:
-                            continue
-            except:
-                pass
-            return False
-
-        for frame in target_page.frames:
-            res = await process_frame(frame)
-            if isinstance(res, str):
-                return res
     except:
         pass
     return None
 
+async def try_solve_captcha(target_page):
+    try:
+        if target_page.is_closed(): return False
+        for frame in target_page.frames:
+            try:
+                url_lower = frame.url.lower()
+                if any(x in url_lower for x in ['auralogicpine', 'filter', 'captcha', 'verify', 'challenge']):
+                    input_loc = frame.locator("input[type='text']").first
+                    btn_loc = frame.locator("input[type='submit'], button, input[value='Continue']").first
+                    if await input_loc.count() > 0 and await btn_loc.count() > 0 and await input_loc.is_visible():
+                        all_imgs = await frame.locator("img").all()
+                        for img_loc in all_imgs:
+                            box = await img_loc.bounding_box()
+                            if box and box['width'] > 30 and box['height'] > 15 and box['height'] < 250:
+                                img_bytes = await img_loc.screenshot()
+                                num = solve_captcha_api(img_bytes)
+                                if num and len(num) >= 3:
+                                    await input_loc.fill(num)
+                                    await target_page.wait_for_timeout(300)
+                                    await btn_loc.click()
+                                    await target_page.wait_for_timeout(4000)
+                                    return True
+            except:
+                continue
+    except:
+        pass
+    return False
+
 async def run_bot():
-    print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
+    print(f"Starting SijjMoviesHub Direct Download Bot ID: {BOT_ID}")
     
     BOT_DIRECT_URLS = {
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
@@ -380,13 +287,11 @@ async def run_bot():
                 text_lower = text.lower() if text else ""
                 if "jio users" in text_lower or "low quality" in text_lower: continue
                     
-                if any(res in text_lower for res in ['.mp4', '.mkv', '1080', '720', '480', 'pc hd']):
-                    if any(nav in text_lower for nav in ['home', 'category', 'disclaimer', 'contact']): continue
+                if any(res in text_lower for res in ['.mp4', '.mkv', '720', '480']):
+                    if any(nav in text_lower for nav in ['home', 'category', 'disclaimer', 'contact', 'series']): continue
                         
-                    if "1080" in text_lower or "full hd" in text_lower:
-                        target_link = link; res_label = "url_1080p"; break
-                    elif "720" in text_lower or "pc hd" in text_lower:
-                        if res_label != "url_1080p": target_link = link; res_label = "url_720p"
+                    if "720" in text_lower or "pc hd" in text_lower:
+                        target_link = link; res_label = "url_720p"; break
                     elif "480" in text_lower:
                         if not res_label: target_link = link; res_label = "url_480p"
 
@@ -394,85 +299,31 @@ async def run_bot():
                 
             wd = f"/tmp/w_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
-            downloaded_paths = {}
+            downloaded_file_path = None
 
-            stolen_media_url = None
-            async def sniff_response(response):
-                nonlocal stolen_media_url
-                if stolen_media_url: return
-                try:
-                    url = response.url.lower()
-                    if any(bad in url for bad in ['cdn-cgi', 'rum', 'analytics', 'googletagmanager', 'pixel', 'stat']): return
-                    headers = response.headers
-                    content_type = headers.get("content-type", "").lower()
-                    if any(ext in url for ext in ['.html', '.js', '.css']) or 'text/html' in content_type or 'image/' in content_type: return
-
-                    if "video/" in content_type or "application/octet-stream" in content_type or "application/x-download" in content_type:
-                        stolen_media_url = response.url
-                        print(f"🕵️ [SNIFFER] Media link caught: {response.url}")
-                    elif ('?'.split(url)[0].endswith('.mp4') or '?'.split(url)[0].endswith('.mkv')):
-                        stolen_media_url = response.url
-                        print(f"🕵️ [SNIFFER] Media link caught (Clean): {response.url}")
-                except:
-                    pass
-
-            context.on("response", sniff_response)
+            print(f"Clicking link for {res_label} and waiting for direct browser download...")
             
-            async def handle_download(download):
-                nonlocal stolen_media_url
-                try:
-                    url = download.url
-                    if url:
-                        stolen_media_url = url
-                        print(f"🎯 [DOWNLOAD EVENT] Direct download URL captured: {url}")
-                except:
-                    pass
-
-            page.on("download", handle_download)
-            
-            popups = []
-            def handle_new_tab(new_page):
-                popups.append(new_page)
-                new_page.on("download", handle_download)
-            context.on("page", handle_new_tab)
-
-            print(f"Clicking for {res_label} and hunting Captcha/Download...")
-            await human_click(page, target_link)
-            
-            for _ in range(50):
-                if stolen_media_url: break
+            try:
+                # Playwright native download waiter
+                async with page.expect_download(timeout=45000) as download_info:
+                    await human_click(page, target_link)
                 
-                # Check main page
-                res = await try_solve_captcha_and_extract_link(page)
-                if isinstance(res, str):
-                    stolen_media_url = res
-                    break
-                    
-                # Check popups
-                for p in popups:
-                    if not p.is_closed():
-                        res = await try_solve_captcha_and_extract_link(p)
-                        if isinstance(res, str):
-                            stolen_media_url = res
-                            break
-                            
-                await asyncio.sleep(1)
+                download = await download_info.value
+                file_path = os.path.join(wd, download.suggested_filename)
+                await download.save_as(file_path)
+                
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 1024 * 1024:
+                    downloaded_file_path = file_path
+                    print(f"🎯 SUCCESS! File downloaded natively: {file_path}")
+            except Exception as e:
+                print(f"⚠️ Native download trigger missed, checking popups/redirects: {e}")
+                # Fallback: check if new page opened and captcha needs solving
+                for _ in range(15):
+                    await try_solve_captcha(page)
+                    await asyncio.sleep(1)
 
-            context.remove_listener("response", sniff_response)
-            context.remove_listener("page", handle_new_tab)
-            for p in popups:
-                try: await p.close()
-                except: pass
-
-            if stolen_media_url:
-                print(f"🎯 Handing over link to Aria2c...")
-                path = download_with_aria2(stolen_media_url, wd, m_url)
-                if path:
-                    downloaded_paths[res_label] = path
-            else:
-                print("❌ Sniffer failed to catch media link.")
-
-            if any(downloaded_paths.values()):
+            if downloaded_file_path:
+                downloaded_paths = {res_label: downloaded_file_path}
                 title = tmdb_data.get("title", "Untitled")
                 meta = {
                     "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
