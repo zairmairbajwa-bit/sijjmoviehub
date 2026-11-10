@@ -29,7 +29,43 @@ session.headers.update({
 })
 
 def clean_filename(name):
-    return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+    cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+    return re.sub(r'_+', '_', cleaned).strip('_')
+
+# Purane ghalat/underscore wale links ko auto-fix karne ka function
+def fix_existing_firebase_links():
+    print("[MIGRATION] Checking database for old messy names to fix...")
+    try:
+        res = requests.get(f"{FIREBASE_URL}/movies.json", timeout=15)
+        if res.status_code == 200 and res.json():
+            movies_data = res.json()
+            for tmdb_id, data in movies_data.items():
+                if not isinstance(data, dict): continue
+                title = data.get("title", "")
+                release_year = str(data.get("release_date", "2026"))[:4]
+                safe_title = clean_filename(title)
+                
+                updated = False
+                for res_key in ["url_480p", "url_720p", "url_1080p", "stream_url"]:
+                    link = data.get(res_key, "")
+                    if link and "___________________" in link:
+                        match = re.search(r'(sijjhub-media-\d+-\d+)', link)
+                        if match:
+                            ident = match.group(1)
+                            res_label = res_key.replace("url_", "").replace("stream_", "1080p")
+                            ext = ".mkv"
+                            
+                            new_cf = f"{safe_title}_{release_year}_{res_label}_{tmdb_id}{ext}"
+                            new_link = f"https://archive.org/download/{ident}/{new_cf}"
+                            
+                            data[res_key] = new_link
+                            updated = True
+                
+                if updated:
+                    requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(data), timeout=10)
+                    print(f"[MIGRATION] Fixed links for: {title} (ID: {tmdb_id})")
+    except Exception as e:
+        print(f"[MIGRATION] Error during auto-fix: {e}")
 
 def is_fully_in_firebase(tmdb_id):
     try:
@@ -83,11 +119,12 @@ def search_tmdb_from_title(raw_title):
         print(f"❌ TMDB Exception: {e}")
     return None
 
-# 💡 NEW FIX: Yeh function ab ek waqt mein sirf 1 resolution upload karega!
 def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path):
     ext = os.path.splitext(f_path)[1].lower()
     if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
-    cf = f"{clean_filename(meta['title'])}_{release_year}_{res_label}_{tmdb_id}{ext}"
+    
+    safe_title = clean_filename(meta['title'])
+    cf = f"{safe_title}_{release_year}_{res_label}_{tmdb_id}{ext}"
     tp = os.path.join(os.path.dirname(f_path), cf)
     
     if f_path != tp:
@@ -109,10 +146,13 @@ def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f
             requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
             print(f"✅ {res_label} Uploaded & Firebase Synced Successfully!")
             
-            # 💡 SMART FIX: Upload hote hi file delete kardo taake RAM full na ho!
             try:
                 os.remove(tp)
             except: pass
+            
+            # 💡 SPAM FIX: Archive.org ko anti-spam delay (15 seconds) dena zaroori hai
+            print("⏳ Waiting 15 seconds to prevent Archive.org rate limit...")
+            time.sleep(15)
             
             return True
         else:
@@ -125,7 +165,6 @@ def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f
 
 def download_with_aria2(url, work_dir, referer_url):
     print(f"Step 5: Aria2c Downloading REAL Video File (High Speed Mode) -> {url}")
-    # 💡 Option 1: High speed 4 connections!
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", "-j", "4", 
@@ -141,8 +180,8 @@ def download_with_aria2(url, work_dir, referer_url):
             print(f"--> Download Attempt {attempt}...")
             subprocess.run(cmd, check=True, timeout=7200)
             break
-        except subprocess.CalledProcessError as e:
-            print(f"⚠️ Server dropped connection at end. Resuming remaining bytes... (Attempt {attempt}/3)")
+        except subprocess.CalledProcessError:
+            print(f"⚠️ Server dropped connection. Resuming... (Attempt {attempt}/3)")
             time.sleep(3)
         except Exception as e:
             print(f"Aria2 download failed: {e}")
@@ -157,6 +196,10 @@ def download_with_aria2(url, work_dir, referer_url):
 
 def run_bot():
     print(f"Starting Crash-Free Human Flow Bot ID: {BOT_ID}")
+    
+    if BOT_ID == 1:
+        fix_existing_firebase_links()
+        
     completed = 0
     start_time = time.time()
     
@@ -214,7 +257,6 @@ def run_bot():
         wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
         os.makedirs(wd, exist_ok=True)
         
-        # 💡 NEW FIX: Yahan ek movie ka folder aur meta set hoga
         release_year = tmdb_data.get("release_date", "2026")[:4]
         ident = f"sijjhub-media-{tmdb_id}-{int(time.time())}"
         title = tmdb_data.get("title", "Untitled")
@@ -225,7 +267,6 @@ def run_bot():
             "hindi_dubbed": True, "category": "Latest Updates"
         }
 
-        # Ab resolutions ki bari aayegi
         for res_label, resolution_page_url in res_links.items():
             print(f"Step 3: Clicking on Resolution {res_label} -> {resolution_page_url}")
             try:
@@ -265,7 +306,6 @@ def run_bot():
                         f_path = download_with_aria2(real_mkv_url, wd, final_page_resp.url)
                         
                         if f_path: 
-                            # 💡 DOWNLOAD HOTE HI UPLOAD KAR DO!
                             upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path)
                     
                     time.sleep(2) 
