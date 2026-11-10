@@ -26,10 +26,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Playwright aur Linux libraries install
+          # AI Vision (Pillow aur pytesseract) install karein
+          pip install pytesseract Pillow
+          # Playwright aur Linux libraries
           playwright install --with-deps chromium
           sudo apt-get update
-          sudo apt-get install -y aria2
+          sudo apt-get install -y aria2 tesseract-ocr
 
       - name: Run Playwright Bot
         # Yahan '-u' lagaya hai taake logs live show hon!
