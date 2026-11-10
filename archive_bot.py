@@ -104,7 +104,7 @@ def upload_to_archive_and_sync(meta, video_paths):
     return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Step 4: Downloading file via Aria2c from URL -> {url}")
+    print(f"Step 5: Aria2c Starting Download (File) -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
@@ -188,18 +188,12 @@ def run_bot():
                 res_resp = requests.get(resolution_page_url, headers=res_headers, timeout=25)
                 
                 server_url = None
-                
-                # HTML mein mojood har <a> tag ko dhoondo chahay usme newlines (enters) hon (re.DOTALL lazmi tha)
                 matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', res_resp.text, re.IGNORECASE | re.DOTALL)
                 
                 available_servers = {}
                 for match in matches:
                     href = match.group(1)
-                    
-                    # Button ke andar se saare <font>, <div> tags hataye aur pure text nikal liya
                     clean_text = re.sub(r'<[^>]+>', ' ', match.group(2)).replace('\n', ' ').strip().lower()
-                    
-                    # Exact red buttons pakraye
                     if 'server 4' in clean_text: available_servers[4] = href
                     elif 'server 3' in clean_text: available_servers[3] = href
                     elif 'server 6' in clean_text: available_servers[6] = href
@@ -208,22 +202,49 @@ def run_bot():
                     elif 'server 1' in clean_text: available_servers[1] = href
                     elif 'server' in clean_text: available_servers[99] = href
                 
-                # Priority: Pehle 4, phir 3, phir 6 waghera
                 for s_num in [4, 3, 6, 5, 2, 1, 99]:
                     if s_num in available_servers:
                         server_url = urllib.parse.urljoin(resolution_page_url, available_servers[s_num])
-                        print(f"--> Found 'Server {s_num}' button! Link: {server_url}")
+                        print(f"--> Found 'Server {s_num}' button! Redirect Link: {server_url}")
                         break
                         
                 if server_url:
-                    print(f"Step 4: Clicking Server Link -> {server_url}")
-                    f_path = download_with_aria2(server_url, wd, resolution_page_url)
-                    if f_path: downloaded_paths[res_label] = f_path
+                    print(f"Step 4: Bypassing Redirect Page to get actual Video File...")
+                    # Is verification link ko pehle khud open karke check karo
+                    bypass_headers = HEADERS.copy()
+                    bypass_headers["Referer"] = resolution_page_url
+                    bypass_resp = requests.get(server_url, headers=bypass_headers, timeout=25)
                     
-                    print(f"Step 5: Download finished. Going BACK...")
+                    final_media_url = None
+                    # Redirect page ke andar se final mkv/mp4 link pakro
+                    links_in_bypass = re.findall(r'href=["\']([^"\']+)["\']', bypass_resp.text, re.IGNORECASE)
+                    for link in links_in_bypass:
+                        if '.mkv' in link.lower() or '.mp4' in link.lower() or 'download' in link.lower() or 'dl.' in link.lower():
+                            # Yeh link social ya ads nahi hona chahiye
+                            if not any(x in link.lower() for x in ['facebook.com', 't.me', 'twitter.com']):
+                                final_media_url = urllib.parse.urljoin(server_url, link)
+                                break
+                                
+                    # Agar andar naya link mila toh woh use karo, warna original server_url
+                    if final_media_url:
+                        print(f"--> Success! Found Real Video Link: {final_media_url}")
+                        target_download_url = final_media_url
+                    else:
+                        # Agar server_url hi final tha (lekin redirect wala) toh fallback
+                        print(f"--> No direct media link found in HTML, trying aria2c on the redirect link.")
+                        target_download_url = server_url
+                    
+                    f_path = download_with_aria2(target_download_url, wd, server_url)
+                    
+                    if f_path: 
+                        downloaded_paths[res_label] = f_path
+                        print(f"Step 6: Download finished successfully.")
+                    else:
+                        print(f"❌ Aria2c fail ho gaya ya sirf HTML download ki.")
+                    
                     time.sleep(2) 
                 else:
-                    print(f"❌ ERROR: Is page par red server buttons nahi milay! Pura page check kar liya.")
+                    print(f"❌ ERROR: Is page par red server buttons nahi milay!")
                     
             except Exception as e:
                 print(f"❌ Failed download step for {res_label}: {e}")
