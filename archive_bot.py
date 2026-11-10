@@ -224,7 +224,7 @@ def solve_captcha_api(img_bytes):
     return None
 
 # ==========================================
-# 🧠 AGGRESSIVE CAPTCHA & DOWNLOAD CLICKER
+# 🧠 SMART CAPTCHA & ANTI-LOOP DOWNLOAD CLICKER
 # ==========================================
 async def try_solve_captcha_and_download(target_page):
     try:
@@ -240,19 +240,25 @@ async def try_solve_captcha_and_download(target_page):
                         has_text = True
                 except: pass
                 
-                # Agar ye Captcha page nahi hai, toh page par mojood har download/server link ko dhoondh kar click karo!
+                # Agar ye Captcha page nahi hai, toh check karo ke kya ye final Download page hai?
                 if not (is_suspicious_url or has_text):
                     all_elements = await frame.locator("a, button, input[type='button']").all()
                     for el in all_elements:
                         try:
                             txt = await el.inner_text()
                             href = await el.get_attribute("href")
-                            if txt and any(w in txt.lower() for w in ['download', 'server', 'click here', 'direct', 'fast', 'file', '.mp4', '.mkv']):
-                                if href and not "#" in href:
-                                    print(f"🎯 [AUTO-CLICK] Clicking download link on page: {txt.strip()}")
-                                    await el.click(force=True)
-                                    await target_page.wait_for_timeout(3000)
-                                    return True
+                            if txt:
+                                txt_lower = txt.lower()
+                                # 🛑 BLACKLIST: Sidebar / Generic category links ko bilkul ignore karo!
+                                if "new hollywood series" in txt_lower or "category" in txt_lower or "home" in txt_lower:
+                                    continue
+                                    
+                                if any(w in txt_lower for w in ['download file', 'server', 'click here', 'direct', 'fast', 'resumable', '.mp4', '.mkv']):
+                                    if href and not "#" in href:
+                                        print(f"🎯 [AUTO-CLICK] Clicking valid download link: {txt.strip()}")
+                                        await el.click(force=True)
+                                        await target_page.wait_for_timeout(3000)
+                                        return True
                         except:
                             continue
                     return False
