@@ -166,7 +166,7 @@ async def get_paginated_movies(page, start_url):
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
-# 🤖 DOUBLE-TAP CLICK (Ads bypass karne ke liye)
+# 🤖 DOUBLE-TAP CLICK
 async def human_click(page, locator):
     try:
         await locator.scroll_into_view_if_needed()
@@ -177,7 +177,7 @@ async def human_click(page, locator):
             y = box['y'] + (box['height'] / 2) + random.uniform(-3, 3)
             
             await page.mouse.move(x, y, steps=random.randint(10, 25))
-            await page.wait_for_timeout(random.randint(200, 400))
+            await page.wait_for_timeout(200)
             
             # 1st Click (Fake tap for ads)
             await page.mouse.down()
@@ -224,9 +224,9 @@ def solve_captcha_api(img_bytes):
     return None
 
 # ==========================================
-# 🧠 ENHANCED SMART CAPTCHA SOLVER
+# 🧠 SMART CAPTCHA & FINAL LINK CLICKER
 # ==========================================
-async def try_solve_captcha(target_page):
+async def try_solve_captcha_and_download(target_page):
     try:
         if target_page.is_closed(): return False
         
@@ -240,7 +240,22 @@ async def try_solve_captcha(target_page):
                         has_text = True
                 except: pass
                 
+                # Agar ye Captcha page nahi hai, toh check karo ke kya ye final Download page hai?
                 if not (is_suspicious_url or has_text):
+                    # 🔍 Check for final download button on redirect page
+                    download_btns = await frame.locator("a, button").all()
+                    for b in download_btns:
+                        try:
+                            bt_text = await b.inner_text()
+                            bt_href = await b.get_attribute("href")
+                            if bt_text and any(w in bt_text.lower() for w in ['download file', 'server', 'click here', 'direct link', '.mp4', '.mkv']):
+                                if bt_href and not "#" in bt_href:
+                                    print(f"🎯 [AUTO-CLICK] Clicking final download button: {bt_text.strip()}")
+                                    await b.click(force=True)
+                                    await target_page.wait_for_timeout(3000)
+                                    return True
+                        except:
+                            continue
                     return False
 
                 input_loc = frame.locator("input[type='text']").first
@@ -373,7 +388,7 @@ async def run_bot():
                         print(f"🕵️ [SNIFFER] Media link caught: {response.url}")
                     elif ('?'.split(url)[0].endswith('.mp4') or '?'.split(url)[0].endswith('.mkv')):
                         stolen_media_url = response.url
-                        print(f"🕵️ [SNIỢ] Media link caught (Clean): {response.url}")
+                        print(f"🕵️ [SNIFFER] Media link caught (Clean): {response.url}")
                 except:
                     pass
 
@@ -384,17 +399,16 @@ async def run_bot():
                 popups.append(new_page)
             context.on("page", handle_new_tab)
 
-            print(f"Clicking for {res_label} and hunting Captcha...")
+            print(f"Clicking for {res_label} and hunting Captcha/Download...")
             await human_click(page, target_link)
             
-            # Extended Loop (40 seconds) to ensure captcha solving and media snatching
-            for _ in range(40):
+            for _ in range(45):
                 if stolen_media_url: break
                 
-                await try_solve_captcha(page)
+                await try_solve_captcha_and_download(page)
                 for p in popups:
                     if not p.is_closed():
-                        await try_solve_captcha(p)
+                        await try_solve_captcha_and_download(p)
                         
                 await asyncio.sleep(1)
 
