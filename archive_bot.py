@@ -166,6 +166,7 @@ async def get_paginated_movies(page, start_url):
     real_movies = [u for u in all_movie_urls if u != start_url and not "latest-hollywood" in u]
     return list(set(real_movies))
 
+# 🤖 THE "HUMAN-LIKE" CLICKING (Double-Tap Trick for Ad Overlays)
 async def human_click(page, locator):
     try:
         await locator.scroll_into_view_if_needed()
@@ -174,16 +175,32 @@ async def human_click(page, locator):
         if box:
             x = box['x'] + (box['width'] / 2) + random.uniform(-10, 10)
             y = box['y'] + (box['height'] / 2) + random.uniform(-3, 3)
+            
+            # Mouse ko button par lana
             await page.mouse.move(x, y, steps=random.randint(10, 25))
             await page.wait_for_timeout(random.randint(200, 600))
+            
+            # --- 1st Click (Fake Click to clear invisible Ad overlays) ---
             await page.mouse.down()
             await page.wait_for_timeout(random.randint(50, 150))
             await page.mouse.up()
-            print("👤 Human-like click executed.")
+            print("👤 Fake tap executed to clear Ad overlays...")
+            
+            # Thora intezar taake ad naye tab mein khul jaye
+            await page.wait_for_timeout(random.randint(600, 1200))
+            
+            # --- 2nd Click (Real Click on the actual download button) ---
+            await page.mouse.down()
+            await page.wait_for_timeout(random.randint(50, 150))
+            await page.mouse.up()
+            print("👤 Real Human-like click executed perfectly.")
+            
         else:
-            await locator.click(delay=random.randint(100, 250))
+            # Agar bounding box fail ho jaye toh normal click (with force to pierce ads)
+            await locator.click(delay=random.randint(100, 250), force=True)
+            print("👤 Fallback click executed.")
     except Exception as e:
-        await locator.click(delay=150)
+        await locator.click(delay=150, force=True)
 
 # ==========================================
 # 🚀 ONLINE AI API CAPTCHA SOLVER (OCR.SPACE)
