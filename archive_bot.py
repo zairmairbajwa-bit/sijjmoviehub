@@ -122,10 +122,39 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 async def run_bot():
-    print(f"Starting FilmyZilla Playwright Native Bot ID: {BOT_ID}")
+    print(f"Starting FilmyZilla Requests Fetch Bot ID: {BOT_ID}")
     completed = 0
     start_time = time.time()
     
+    all_movie_pages = []
+    
+    # 🛡️ Direct Requests fetching to avoid Playwright headless cloudflare drop
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        }
+        print(f"Fetching Front Page via Requests: {BASE_DOMAIN}")
+        resp = requests.get(BASE_DOMAIN, headers=headers, timeout=25)
+        if resp.status_code == 200:
+            hrefs = re.findall(r'href=["\'](.*?)["\']', resp.text)
+            for href in hrefs:
+                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
+                if "/movie/" in abs_url and abs_url.endswith(".html"):
+                    if abs_url not in all_movie_pages:
+                        all_movie_pages.append(abs_url)
+    except Exception as e:
+        print(f"Requests front page error: {e}")
+
+    print(f"Total valid movie pages extracted: {len(all_movie_pages)}")
+
+    chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS) if all_movie_pages else 1
+    start_idx = (BOT_ID - 1) * chunk_size
+    end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
+    
+    my_movie_pages = all_movie_pages[start_idx:end_idx] if all_movie_pages else []
+    print(f"Bot {BOT_ID} assigned range [{start_idx}:{end_idx}]. Total assigned: {len(my_movie_pages)}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True, 
@@ -147,33 +176,6 @@ async def run_bot():
             await stealth.apply_stealth_async(page)
         except:
             pass
-        
-        # 🛡️ Front page ko Playwright ke zariye load karna taake session active rahay
-        print(f"Loading Front Page via Playwright: {BASE_DOMAIN}")
-        all_movie_pages = []
-        try:
-            await page.goto(BASE_DOMAIN, timeout=60000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
-            
-            links = await page.locator("a").all()
-            for link in links:
-                href = await link.get_attribute("href")
-                if href:
-                    abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                    if abs_url.endswith(".html") and not any(skip in abs_url.lower() for skip in ['category', 'contact', 'disclaimer', 'dmca', 'index', 'home']):
-                        if abs_url not in all_movie_pages:
-                            all_movie_pages.append(abs_url)
-        except Exception as e:
-            print(f"Front page load error: {e}")
-
-        print(f"Total valid movies extracted: {len(all_movie_pages)}")
-
-        chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS) if all_movie_pages else 1
-        start_idx = (BOT_ID - 1) * chunk_size
-        end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
-        
-        my_movie_pages = all_movie_pages[start_idx:end_idx] if all_movie_pages else []
-        print(f"Bot {BOT_ID} assigned range [{start_idx}:{end_idx}]. Total assigned: {len(my_movie_pages)}")
 
         for m_url in my_movie_pages:
             if completed >= MAX_MOVIES_PER_RUN: break
