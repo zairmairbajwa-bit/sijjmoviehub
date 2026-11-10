@@ -85,7 +85,7 @@ def upload_to_archive_and_sync(meta, video_paths):
     if not files_to_upload:
         return False
 
-    print(f"Uploading {len(files_to_upload)} files to Archive.org...")
+    print(f"Uploading files to Archive.org...")
     r = ia.upload(
         ident, 
         files=files_to_upload, 
@@ -103,7 +103,7 @@ def upload_to_archive_and_sync(meta, video_paths):
     return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Starting Aria2c Fast Download: {url}")
+    print(f"Downloading file via Aria2c...")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "16", "-s", "16", "-j", "16", 
         "--content-disposition-default-utf8=true",
@@ -122,39 +122,10 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 async def run_bot():
-    print(f"Starting FilmyZilla Requests Fetch Bot ID: {BOT_ID}")
+    print(f"Starting Pure Human-Flow Bot ID: {BOT_ID}")
     completed = 0
     start_time = time.time()
     
-    all_movie_pages = []
-    
-    # 🛡️ Direct Requests fetching to avoid Playwright headless cloudflare drop
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-        }
-        print(f"Fetching Front Page via Requests: {BASE_DOMAIN}")
-        resp = requests.get(BASE_DOMAIN, headers=headers, timeout=25)
-        if resp.status_code == 200:
-            hrefs = re.findall(r'href=["\'](.*?)["\']', resp.text)
-            for href in hrefs:
-                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if "/movie/" in abs_url and abs_url.endswith(".html"):
-                    if abs_url not in all_movie_pages:
-                        all_movie_pages.append(abs_url)
-    except Exception as e:
-        print(f"Requests front page error: {e}")
-
-    print(f"Total valid movie pages extracted: {len(all_movie_pages)}")
-
-    chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS) if all_movie_pages else 1
-    start_idx = (BOT_ID - 1) * chunk_size
-    end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
-    
-    my_movie_pages = all_movie_pages[start_idx:end_idx] if all_movie_pages else []
-    print(f"Bot {BOT_ID} assigned range [{start_idx}:{end_idx}]. Total assigned: {len(my_movie_pages)}")
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True, 
@@ -177,16 +148,45 @@ async def run_bot():
         except:
             pass
 
+        # HUMAN STEP 1: Pehle website ka main page kholo taake Cloudflare clearance mil jaye
+        print(f"Step 1: Opening Home Page -> {BASE_DOMAIN}")
+        try:
+            await page.goto(BASE_DOMAIN, timeout=60000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(4000) # Insano ki tarah thoda wait karo
+        except Exception as e:
+            print(f"Failed to open home page: {e}")
+            await browser.close()
+            return
+
+        # Get all movie links directly from the opened front page
+        all_movie_pages = []
+        links = await page.locator("a").all()
+        for link in links:
+            href = await link.get_attribute("href")
+            if href and "/movie/" in href and href.endswith(".html"):
+                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
+                if abs_url not in all_movie_pages:
+                    all_movie_pages.append(abs_url)
+
+        # Bots mein hissay baant do
+        chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS) if all_movie_pages else 1
+        start_idx = (BOT_ID - 1) * chunk_size
+        end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
+        my_movie_pages = all_movie_pages[start_idx:end_idx] if all_movie_pages else []
+        print(f"Bot {BOT_ID} assigned {len(my_movie_pages)} movies to download.")
+
+        # HUMAN STEP 2: Bari bari movie ke naam par click karo
         for m_url in my_movie_pages:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break 
 
-            print(f"\n--- Bot {BOT_ID} Opening Movie Page: {m_url} ---")
+            print(f"\nStep 2: Clicking on Movie -> {m_url}")
             try:
-                await page.goto(m_url, timeout=60000, wait_until="domcontentloaded")
+                # Referer laga kar jana exactly link click karne ke barabar hai
+                await page.goto(m_url, referer=BASE_DOMAIN, timeout=60000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
             except Exception as e:
-                print(f"Failed to load movie page: {e}")
+                print(f"Skipped movie: {e}")
                 continue
             
             raw_title = await page.title()
@@ -195,79 +195,64 @@ async def run_bot():
                 
             tmdb_id = str(tmdb_data["id"])
             if is_fully_in_firebase(tmdb_id):
-                print(f"Movie already fully synced in Firebase. Skipping.")
+                print(f"Movie pehle se Firebase me hai. Next movie par ja rahe hain.")
                 continue
             
+            # Find 480p, 720p, 1080p links from the page
             res_links = {}
-            links = await page.locator("a").all()
-            for link in links:
-                try:
-                    text = await link.inner_text()
-                    href = await link.get_attribute("href")
-                    if text and href:
-                        t_low = text.lower()
-                        abs_href = urllib.parse.urljoin(BASE_DOMAIN, href)
-                        if "480p" in t_low and "url_480p" not in res_links: res_links["url_480p"] = abs_href
-                        elif "720p" in t_low and "url_720p" not in res_links: res_links["url_720p"] = abs_href
-                        elif "1080p" in t_low and "url_1080p" not in res_links: res_links["url_1080p"] = abs_href
-                except:
-                    continue
+            for res_text in ["480p", "720p", "1080p"]:
+                loc = page.locator(f"a:has-text('{res_text}')")
+                if await loc.count() > 0:
+                    href = await loc.first.get_attribute("href")
+                    if href: res_links[res_text] = urllib.parse.urljoin(BASE_DOMAIN, href)
 
-            print(f"Found Resolutions for {tmdb_data.get('title')}: {list(res_links.keys())}")
             if not res_links: continue
 
             wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
+            # HUMAN STEP 3: Resolution par click karo (jesa k 720p)
             for res_label, resolution_page_url in res_links.items():
-                print(f"Processing {res_label} from: {resolution_page_url}")
+                print(f"Step 3: Clicking on Resolution {res_label}")
                 try:
-                    dl_page = await context.new_page()
-                    await dl_page.goto(resolution_page_url, timeout=60000, wait_until="domcontentloaded")
-                    await dl_page.wait_for_timeout(3000)
+                    await page.goto(resolution_page_url, referer=m_url, timeout=60000, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(3000)
                     
-                    server_links = []
-                    s_anchors = await dl_page.locator("a").all()
+                    # HUMAN STEP 4: Andar Server 4 ya 3 par click karo
+                    server_url = None
+                    s_anchors = await page.locator("a").all()
                     for sa in s_anchors:
                         s_text = await sa.inner_text()
-                        s_href = await sa.get_attribute("href")
-                        if s_text and s_href:
-                            s_low = s_text.lower()
-                            if 'server 4' in s_low or 'server 3' in s_low or 'server' in s_low or 'download' in s_low:
-                                server_links.append((s_low, urllib.parse.urljoin(dl_page.url, s_href)))
-                    
-                    direct_file_url = None
-                    if server_links:
-                        target_srv = None
-                        for s_low, s_url in server_links:
-                            if 'server 4' in s_low:
-                                target_srv = s_url
+                        if 'server 4' in s_text.lower():
+                            server_url = urllib.parse.urljoin(page.url, await sa.get_attribute("href"))
+                            break
+                    if not server_url:
+                        for sa in s_anchors:
+                            s_text = await sa.inner_text()
+                            if 'server 3' in s_text.lower():
+                                server_url = urllib.parse.urljoin(page.url, await sa.get_attribute("href"))
                                 break
-                        if not target_srv:
-                            for s_low, s_url in server_links:
-                                if 'server 3' in s_low:
-                                    target_srv = s_url
-                                    break
-                        if not target_srv:
-                            target_srv = server_links[-1][1]
-                            
-                        print(f"Clicking direct server link: {target_srv}")
-                        async with dl_page.expect_navigation(timeout=15000):
-                            await dl_page.goto(target_srv)
+                    
+                    if server_url:
+                        print(f"Step 4: Clicking on Server link to start download...")
+                        async with page.expect_navigation(timeout=15000):
+                            await page.goto(server_url, referer=resolution_page_url)
                         
-                        direct_file_url = dl_page.url
-                    
-                    await dl_page.close()
-                    
-                    if direct_file_url:
-                        print(f"Downloading {res_label} via Aria2c...")
+                        direct_file_url = page.url
+                        
                         f_path = download_with_aria2(direct_file_url, wd, resolution_page_url)
-                        if f_path:
-                            downloaded_paths[res_label] = f_path
+                        if f_path: downloaded_paths[res_label] = f_path
+                        
+                        # HUMAN STEP 5: Download ke baad back aao
+                        print(f"Step 5: Going BACK to the previous page...")
+                        await page.go_back(wait_until="domcontentloaded")
+                        await page.wait_for_timeout(2000)
+                        
                 except Exception as e:
-                    print(f"Failed to download {res_label}: {e}")
+                    print(f"Failed download step for {res_label}: {e}")
 
+            # Jab teeno resolution ho jayein, toh sync kar do
             if downloaded_paths:
                 title = tmdb_data.get("title", "Untitled")
                 meta = {
@@ -278,12 +263,16 @@ async def run_bot():
                 }
                 if upload_to_archive_and_sync(meta, downloaded_paths):
                     completed += 1
-                    print(f"Successfully synced all resolutions for {title}!")
+                    print(f"Movie Uploaded Successfully!")
                     
             shutil.rmtree(wd, ignore_errors=True)
+            
+            # Wapis front page par jao agli movie ke liye
+            await page.goto(BASE_DOMAIN, timeout=60000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
                 
         await browser.close()
-    print(f"Bot {BOT_ID} run completed successfully.")
+    print("Bot run completed.")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
