@@ -185,42 +185,35 @@ async def human_click(page, locator):
         await locator.click(delay=150)
 
 # ==========================================
-# 🧠 AI OCR CAPTCHA SOLVER (IFRAME SCANNER)
+# 🧠 "SHOOT ON SIGHT" AI OCR CAPTCHA SOLVER 
 # ==========================================
 async def try_solve_captcha(target_page):
     try:
         if target_page.is_closed(): return False
         
-        # Ek chota function jo kisi bhi Frame (Chhoti window) ko check karega
         async def process_frame(frame):
             try:
-                url = frame.url.lower()
+                # Sirf HTML elements check karo, URL ya Text ka wait na karo!
+                img_loc = frame.locator("img").first
+                input_loc = frame.locator("input[type='text']").first
+                btn_loc = frame.locator("input[type='submit'], button, input[value='Continue'], input[type='button']").first
                 
-                # Check if this frame has the captcha elements
-                has_text = False
-                try:
-                    if await frame.locator("text=Please type the numbers").count() > 0: has_text = True
-                except: pass
-                
-                if "auralogicpine" in url or "filter" in url or has_text:
-                    print(f"🚨 [CAPTCHA] Detected inside Frame: {url[:60]}...")
-                    
-                    # Element dhundo (Isi frame ke andar)
-                    img_loc = frame.locator("img").first
-                    input_loc = frame.locator("input[type='text']").first
-                    btn_loc = frame.locator("input[type='submit'], button, input[value='Continue']").first
-                    
-                    if await img_loc.count() > 0 and await input_loc.count() > 0:
-                        print("📸 [CAPTCHA] Elements found! Capturing image...")
-                        await img_loc.wait_for(state="visible", timeout=5000)
+                # Agar Image aur Input dono ek hi frame mein maujood hain aur visible hain
+                if await img_loc.count() > 0 and await input_loc.count() > 0 and await btn_loc.count() > 0:
+                    if await input_loc.is_visible():
+                        print(f"🚨 [CAPTCHA] Suspicious elements found in Frame: {frame.url[:60]}...")
+                        print("📸 [CAPTCHA] Capturing image for AI...")
                         
+                        await img_loc.wait_for(state="visible", timeout=3000)
                         img_bytes = await img_loc.screenshot()
                         img = Image.open(io.BytesIO(img_bytes)).convert('L')
                         
+                        # Tesseract se numbers parhna
                         text = pytesseract.image_to_string(img, config='--psm 8 -c tessedit_char_whitelist=0123456789')
                         num = "".join(filter(str.isdigit, text))
                         
-                        if num:
+                        # Captcha aam taur par kam az kam 3-4 digits ka hota hai
+                        if num and len(num) >= 3:
                             print(f"🤖 [CAPTCHA] AI Vision extracted numbers: {num}")
                             await input_loc.fill(num)
                             await btn_loc.click()
@@ -228,22 +221,15 @@ async def try_solve_captcha(target_page):
                             await target_page.wait_for_timeout(5000)
                             return True
                         else:
-                            print("❌ [CAPTCHA] AI failed to read numbers from the image.")
-                    else:
-                        print("⚠️ [CAPTCHA] Image/Input elements not found inside this frame.")
-            except Exception as e:
-                print(f"💥 [CAPTCHA ERROR] In Frame: {str(e)}")
+                            print("❌ [CAPTCHA] AI found image but no valid numbers detected.")
+            except Exception:
+                pass
             return False
 
-        # 1. Pehle Main Page (Badi window) ko check karein
-        if await process_frame(target_page.main_frame): 
-            return True
-            
-        # 2. Phir saari andar ki Iframes (Chhoti windows) check karein
+        # Har frame check karo (Main page bhi aur chhupi hui iframes bhi)
         for frame in target_page.frames:
-            if frame != target_page.main_frame:
-                if await process_frame(frame): 
-                    return True
+            if await process_frame(frame): 
+                return True
                     
     except Exception as e:
         print(f"💥 [CAPTCHA ERROR] Main function error: {str(e)}")
@@ -257,7 +243,7 @@ async def run_bot():
         1: "https://www.mp4moviez.computer/359/latest-hollywood-hindi-dubbed-movies-(2026).html",
         2: "https://www.mp4moviez.computer/333/latest-hollywood-hindi-dubbed-movies-(2025).html",
         3: "https://www.mp4moviez.computer/289/latest-hollywood-hindi-dubbed-movies-(2024).html",
-        4: "https://www.mp4moviez.computer/235/latest-hollywood-hindi-dubbed-movies-(2023).html"
+        4: "url?id=32"
     }
     
     target_url = BOT_DIRECT_URLS.get(BOT_ID, BOT_DIRECT_URLS[1])
@@ -372,15 +358,13 @@ async def run_bot():
             print(f"Performing HUMAN-LIKE click for {res_label} and waiting for Filtered Sniffer...")
             await human_click(page, target_link)
             
-            # Wait loop: Check for media link AND try to solve Captcha in ALL pages/frames
+            # Wait loop: Check for media link AND aggressive Captcha hunt
             for _ in range(25):
                 if stolen_media_url:
                     break
                 
-                # Scan Main Page and its iFrames
                 await try_solve_captcha(page)
                 
-                # Scan any popup windows and their iFrames
                 for p in popups:
                     if not p.is_closed():
                         await try_solve_captcha(p)
@@ -403,7 +387,7 @@ async def run_bot():
                     downloaded_paths[res_label] = path
                     print(f"Download complete via Aria2c: {path}")
             else:
-                print("❌ Sniffer failed to catch the media link. Captcha might be too hard or server failed to redirect.")
+                print("❌ Sniffer failed to catch the media link.")
 
             if any(downloaded_paths.values()):
                 title = tmdb_data.get("title", "Untitled")
