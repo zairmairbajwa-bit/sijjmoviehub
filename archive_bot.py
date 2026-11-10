@@ -13,6 +13,10 @@ import subprocess
 import internetarchive as ia
 import shutil
 
+# AI Vision ke liye
+from PIL import Image
+import pytesseract
+
 # === SECURE CREDENTIALS ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "7b6a89d3dc55b3a81aa892a88c0da6b9")
 FIREBASE_URL = os.getenv("FIREBASE_URL", "https://sijjmoviehub-default-rtdb.firebaseio.com")
@@ -219,31 +223,48 @@ def solve_captcha_api(img_bytes):
         print(f"💥 [API] Request crashed: {str(e)}")
     return None
 
+# ==========================================
+# 🧠 SMART API CAPTCHA SOLVER (Ignores Search Bars & Ads)
+# ==========================================
 async def try_solve_captcha(target_page):
     try:
         if target_page.is_closed(): return False
         
         async def process_frame(frame):
             try:
+                url_lower = frame.url.lower()
+                
+                # 🛑 SMART FILTER: Check if it's ACTUALLY a captcha page
+                is_suspicious_url = any(x in url_lower for x in ['auralogicpine', 'filter', 'captcha', 'verify', 'challenge'])
+                has_captcha_text = False
+                try:
+                    if await frame.locator("text=Please type the numbers").count() > 0:
+                        has_captcha_text = True
+                except: pass
+                
+                # Agar yeh normal Mp4moviez ka page hai aur Captcha ka naam-o-nishan nahi, toh foran wapis jao!
+                if not (is_suspicious_url or has_captcha_text):
+                    return False
+
                 input_loc = frame.locator("input[type='text']").first
                 btn_loc = frame.locator("input[type='submit'], button, input[value='Continue'], input[type='button']").first
                 
                 if await input_loc.count() > 0 and await btn_loc.count() > 0 and await input_loc.is_visible():
-                    print(f"🚨 [CAPTCHA] Elements found in Frame: {frame.url[:60]}...")
+                    print(f"🚨 [CAPTCHA] REAL Captcha found in Frame: {frame.url[:60]}...")
                     
                     all_imgs = await frame.locator("img").all()
                     
                     for img_loc in all_imgs:
                         try:
                             box = await img_loc.bounding_box()
-                            if box and box['width'] > 30 and box['height'] > 15:
+                            # Captcha image size is usually specific, ignoring huge ad banners (>300 height)
+                            if box and box['width'] > 30 and box['height'] > 15 and box['height'] < 250:
                                 print(f"📸 [CAPTCHA] Capturing image (Size: {int(box['width'])}x{int(box['height'])})...")
                                 
                                 await img_loc.scroll_into_view_if_needed()
                                 await img_loc.wait_for(state="visible", timeout=3000)
                                 img_bytes = await img_loc.screenshot()
                                 
-                                # Use Online API instead of local Tesseract
                                 num = solve_captcha_api(img_bytes)
                                 
                                 if num and len(num) >= 3:
@@ -269,6 +290,7 @@ async def try_solve_captcha(target_page):
     except Exception as e:
         pass
     return False
+
 
 async def run_bot():
     print(f"Starting SijjMoviesHub Direct URL Bot ID: {BOT_ID}")
