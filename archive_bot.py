@@ -21,6 +21,7 @@ IA_ACCESS = os.getenv("IA_ACCESS", "").strip()
 IA_SECRET = os.getenv("IA_SECRET", "").strip()
 
 MAX_MOVIES_PER_RUN = 5
+TOTAL_BOTS = 4  # Aapke total GitHub Matrix bots
 
 def clean_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -121,29 +122,36 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 async def run_bot():
-    print(f"Starting FilmyZilla Regex Bot ID: {BOT_ID}")
+    print(f"Starting FilmyZilla Partitioned Bot ID: {BOT_ID}")
     completed = 0
     start_time = time.time()
     
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
-    movie_pages = []
+    all_movie_pages = []
     
     try:
         print(f"Fetching Front Page: {BASE_DOMAIN}")
         response = requests.get(BASE_DOMAIN, headers=headers, timeout=20)
         if response.status_code == 200:
-            # Extract href links using pure RegEx (no bs4 needed)
             hrefs = re.findall(r'href=["\'](.*?)["\']', response.text)
             for href in hrefs:
                 abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                 if abs_url.endswith(".html") and not any(skip in abs_url.lower() for skip in ['category', 'contact', 'disclaimer', 'dmca', 'index', 'home']):
-                    if abs_url not in movie_pages:
-                        movie_pages.append(abs_url)
+                    if abs_url not in all_movie_pages:
+                        all_movie_pages.append(abs_url)
     except Exception as e:
         print(f"Front page regex error: {e}")
 
-    print(f"Total movies found from Front Page: {len(movie_pages)}")
+    print(f"Total movies found from Front Page: {len(all_movie_pages)}")
     
+    # ✂️ SMART PARTITIONING: Har bot sirf apne hissay ki movies uthayega (e.g. Bot 1, Bot 2, Bot 3, Bot 4)
+    chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS)
+    start_idx = (BOT_ID - 1) * chunk_size
+    end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
+    
+    my_movie_pages = all_movie_pages[start_idx:end_idx]
+    print(f"Bot {BOT_ID} assigned movies range [{start_idx}:{end_idx}]. Total assigned: {len(my_movie_pages)}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True, 
@@ -166,11 +174,11 @@ async def run_bot():
         except:
             pass
         
-        for m_url in movie_pages:
+        for m_url in my_movie_pages:
             if completed >= MAX_MOVIES_PER_RUN: break
             if (time.time() - start_time) > 20000: break 
 
-            print(f"\n--- Opening Movie Page: {m_url} ---")
+            print(f"\n--- Bot {BOT_ID} Opening Movie Page: {m_url} ---")
             try:
                 await page.goto(m_url, timeout=60000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
@@ -206,11 +214,11 @@ async def run_bot():
             os.makedirs(wd, exist_ok=True)
             downloaded_paths = {}
 
-            for res_label, download_page_url in res_links.items():
-                print(f"Processing {res_label} from: {download_page_url}")
+            for res_label, resolution_page_url in res_links.items():
+                print(f"Processing {res_label} from: {resolution_page_url}")
                 try:
                     dl_page = await context.new_page()
-                    await dl_page.goto(download_page_url, timeout=60000, wait_until="domcontentloaded")
+                    await dl_page.goto(resolution_page_url, timeout=60000, wait_until="domcontentloaded")
                     await dl_page.wait_for_timeout(3000)
                     
                     server_links = []
@@ -219,14 +227,26 @@ async def run_bot():
                         s_text = await sa.inner_text()
                         s_href = await sa.get_attribute("href")
                         if s_text and s_href:
-                            if any(srv in s_text.lower() for srv in ['server 4', 'server 3', 'server 2', 'download']):
-                                server_links.append(urllib.parse.urljoin(dl_page.url, s_href))
+                            s_low = s_text.lower()
+                            if 'server 4' in s_low or 'server 3' in s_low or 'server' in s_low:
+                                server_links.append((s_low, urllib.parse.urljoin(dl_page.url, s_href)))
                     
                     direct_file_url = None
                     if server_links:
-                        target_srv = server_links[-1]
-                        print(f"Clicking server download link: {target_srv}")
-                        
+                        target_srv = None
+                        for s_low, s_url in server_links:
+                            if 'server 4' in s_low:
+                                target_srv = s_url
+                                break
+                        if not target_srv:
+                            for s_low, s_url in server_links:
+                                if 'server 3' in s_low:
+                                    target_srv = s_url
+                                    break
+                        if not target_srv:
+                            target_srv = server_links[-1][1]
+                            
+                        print(f"Clicking direct server link: {target_srv}")
                         async with dl_page.expect_navigation(timeout=15000):
                             await dl_page.goto(target_srv)
                         
@@ -236,7 +256,7 @@ async def run_bot():
                     
                     if direct_file_url:
                         print(f"Downloading {res_label} via Aria2c...")
-                        f_path = download_with_aria2(direct_file_url, wd, download_page_url)
+                        f_path = download_with_aria2(direct_file_url, wd, resolution_page_url)
                         if f_path:
                             downloaded_paths[res_label] = f_path
                 except Exception as e:
@@ -257,7 +277,7 @@ async def run_bot():
             shutil.rmtree(wd, ignore_errors=True)
                 
         await browser.close()
-    print("FilmyZilla Regex Bot run completed.")
+    print(f"Bot {BOT_ID} run completed successfully.")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
