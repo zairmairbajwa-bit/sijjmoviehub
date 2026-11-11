@@ -8,12 +8,11 @@ import subprocess
 import internetarchive as ia
 import shutil
 import random
+import unicodedata
 
 # === SECURE CREDENTIALS ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
-
-# 💡 NAYA DOMAIN
 BASE_DOMAIN = "https://filmicity.in"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
@@ -44,36 +43,48 @@ def get_firebase_movie_data(tmdb_id):
     except: pass
     return None
 
-# 💡 BOTS KA KAAM BANT DIYA GAYA HAI (TMDB YEAR DIVISION)
+# 💡 NON-ENGLISH CHARACTERS SAHAF KARNE KE LIYE HELPER (Hindi/Arabic/Japanese hata kar pure English naam layega)
+def sanitize_title(title):
+    if not title: return ""
+    # Normalizing unicode to remove accents, but keeping basic english letters
+    nfkd_form = unicodedata.normalize('NFKD', title)
+    only_ascii = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    # Sirf English letters, numbers aur spaces bachane ke liye
+    cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', only_ascii).strip()
+    return cleaned
+
 def fetch_movies_from_tmdb_pages(bot_id):
     movie_titles_to_search = []
-    # Bot 1 -> 2026, Bot 2 -> 2025, Bot 3 -> 2024 ...
     target_year = 2027 - bot_id 
     
-    print(f"📌 [BOT {bot_id}] Assigned TMDB YEAR: {target_year} for MAXIMUM Content!")
+    print(f"📌 [BOT {bot_id}] Assigned TMDB YEAR: {target_year}")
     
-    for page in range(1, 6): # Top 5 pages uthayega
-        url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&language=hi&primary_release_year={target_year}&sort_by=popularity.desc&page={page}"
+    for page in range(1, 6):
+        url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&language=en-US&primary_release_year={target_year}&sort_by=popularity.desc&page={page}"
         try:
             res = requests.get(url, timeout=10)
             if res.status_code == 200:
                 results = res.json().get("results", [])
                 for item in results:
-                    title = item.get("title") or item.get("name")
-                    if title and title not in movie_titles_to_search:
-                        movie_titles_to_search.append(title)
+                    # English title ko pehli priority di hai taake website par asani se search ho sakay
+                    title = item.get("title") or item.get("original_title") or item.get("name")
+                    if title:
+                        clean_t = sanitize_title(title)
+                        if clean_t and clean_t not in movie_titles_to_search:
+                            movie_titles_to_search.append(clean_t)
         except Exception as e:
             print(f"❌ [BOT {bot_id}] TMDB Error: {e}")
             
-    print(f"📌 [BOT {bot_id}] Ready to search {len(movie_titles_to_search)} movies from Year {target_year} on Filmicity!")
+    print(f"📌 [BOT {bot_id}] Collected {len(movie_titles_to_search)} English-clean titles from Year {target_year}.")
     random.shuffle(movie_titles_to_search)
     return movie_titles_to_search
 
-# 💡 WEBSITE PAR DIRECT SEARCH FUNCTION
 def search_on_filmicity(movie_title, bot_id):
-    clean_query = re.sub(r'[^a-zA-Z0-9\s]', '', movie_title).strip()
+    clean_query = movie_title.strip()
+    if not clean_query: return None
+    
     search_url = f"{BASE_DOMAIN}/search.html?q={urllib.parse.quote(clean_query)}"
-    print(f"🔎 [BOT {bot_id}] Searching '{clean_query}' on Filmicity Search Bar...")
+    print(f"🔎 [BOT {bot_id}] Searching '{clean_query}' on Filmicity...")
     
     try:
         session.headers.update({"Referer": BASE_DOMAIN})
@@ -86,15 +97,14 @@ def search_on_filmicity(movie_title, bot_id):
                 href = match.group(1)
                 link_text = re.sub(r'<[^>]+>', ' ', match.group(2)).strip().lower()
                 
-                # Check if search term matches the result
                 if query_words and (query_words[0] in link_text or query_words[0] in href.lower()):
-                    if "category" not in href.lower(): # Only pick actual movies
+                    if "category" not in href.lower():
                         abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                        print(f"🎯 [BOT {bot_id}] Search Match Found: {abs_url}")
+                        print(f"🎯 [BOT {bot_id}] Match Found: {abs_url}")
                         return abs_url
     except Exception:
         pass
-    print(f"⚠️ [BOT {bot_id}] Movie not found on website: {movie_title}")
+    print(f"⚠️ [BOT {bot_id}] Movie not found: {movie_title}")
     return None
 
 def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_id):
@@ -146,7 +156,6 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
         except: pass
         return False
 
-# 💡 HIGH-SPEED ARIA2 DIRECT DOWNLOAD
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
     print(f"📥 [BOT {bot_id}] Downloading {res_label} Directly (8 Connections) -> {url}")
     cmd = [
@@ -168,27 +177,25 @@ def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
     return None
 
 def run_bot():
-    print(f"🔥 Starting TMDB->SEARCH Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
+    print(f"🔥 Starting Search-Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
         
     if BOT_ID == 8:
-        print(f"🤖 [BOT 8] Live Worker is on Standby for App Users...")
+        print(f"🤖 [BOT 8] Live Worker is on Standby...")
         time.sleep(10)
         return
 
     completed = 0
     start_time = time.time()
     
-    # 1. TMDB se movies ki list uthana (Year-wise divided)
     tmdb_titles = fetch_movies_from_tmdb_pages(BOT_ID)
 
     for title_query in tmdb_titles:
         if completed >= MAX_MOVIES_PER_RUN or (time.time() - start_time) > 20000: break 
 
         print(f"\n--------------------------------------------------")
-        print(f"🛠️ [BOT {BOT_ID}] Step 1: Processing TMDB Movie -> '{title_query}'")
+        print(f"🛠️ [BOT {BOT_ID}] Step 1: Processing Movie -> '{title_query}'")
 
-        # TMDB data lena pre-check ke liye
-        url_tmdb = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(title_query)}&language=hi"
+        url_tmdb = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(title_query)}&language=en-US"
         try:
             t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
             valid = [r for r in t_res if r.get("media_type") in ["movie", "tv"]]
@@ -198,25 +205,22 @@ def run_bot():
             
         tmdb_id = str(tmdb_data["id"])
         
-        # 2. Database check karna ke pehle toh nahi ki hui
         existing_db_movie = get_firebase_movie_data(tmdb_id)
         if existing_db_movie:
             if existing_db_movie.get("url_480p") and existing_db_movie.get("url_720p") and existing_db_movie.get("url_1080p"):
                 print(f"⏩ [BOT {BOT_ID}] All resolutions exist in Firebase! Skipping...")
                 continue
 
-        # 3. Filmicity ki website par search marna
         m_url = search_on_filmicity(title_query, BOT_ID)
         if not m_url: continue
 
-        print(f"✅ [BOT {BOT_ID}] Step 3: Extracting Direct Download Links from Page...")
+        print(f"✅ [BOT {BOT_ID}] Step 3: Extracting Direct Download Links...")
         try:
             session.headers.update({"Referer": BASE_DOMAIN})
             m_resp = session.get(m_url, timeout=25)
         except: continue
         
         res_links = {}
-        # Screen ke mutabiq direct "Download 470Mb {480p}" wale links pakarna
         m_hrefs = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL)
         for href, text in m_hrefs:
             t_low = text.lower()
@@ -226,7 +230,7 @@ def run_bot():
                 elif "480p" in t_low: res_links["480p"] = urllib.parse.urljoin(BASE_DOMAIN, href)
 
         if not res_links: 
-            print(f"⚠️ [BOT {BOT_ID}] No direct download links found on page.")
+            print(f"⚠️ [BOT {BOT_ID}] No direct download links found.")
             continue
 
         wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
@@ -243,21 +247,17 @@ def run_bot():
             "hindi_dubbed": True, "category": "Trending Movies"
         }
 
-        # 💡 NAYA STEP 4: DIRECT DOWNLOAD (Seedha Aria2c ko link dena hai)
         for res_label, direct_download_url in res_links.items():
             
             if existing_db_movie and existing_db_movie.get(f"url_{res_label}"):
                 print(f"⏩ [BOT {BOT_ID}] SKIPPING {res_label}: Already in Firebase!")
                 continue
                 
-            print(f"\n⚙️ [BOT {BOT_ID}] Step 4: Initiating Direct Download for {res_label}...")
+            print(f"\n⚙️ [BOT {BOT_ID}] Step 4: Direct Downloading {res_label}...")
             try:
-                # Seedha aria2 function ko link bhejo
                 f_path = download_with_aria2(direct_download_url, wd, m_url, BOT_ID, res_label)
-                
                 if f_path: 
                     upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, BOT_ID)
-                
                 time.sleep(1) 
             except Exception as e:
                 print(f"❌ [BOT {BOT_ID}] Error in {res_label}: {e}")
