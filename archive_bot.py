@@ -52,7 +52,7 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-# 💡 FIXED DEEP SPIDER CRAWLER (Sub-folders mein ghusne ke liye)
+# 💡 PERFECTED SPIDER (Category -> Year Folder -> Movie)
 def crawl_filmyzilla_deep_categories(bot_id):
     print(f"🕸️ [BOT {bot_id}] Initiating DEEP SPIDER CRAWL on FilmyZilla Categories & Years...")
     
@@ -68,30 +68,28 @@ def crawl_filmyzilla_deep_categories(bot_id):
     matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', r.text, re.IGNORECASE)
     for match in matches:
         href = match.group(1)
-        text = match.group(2).lower()
         full_url = urllib.parse.urljoin(BASE_DOMAIN, href)
         
-        if full_url.startswith(BASE_DOMAIN) and "/movie/" not in full_url and full_url != BASE_DOMAIN:
-            if any(x in text for x in ['movies', 'series', 'shows', 'dubbed', 'marvel', 'category']) or "category" in full_url:
-                if full_url not in category_urls:
-                    category_urls.append(full_url)
+        if full_url.startswith(BASE_DOMAIN) and "/category/" in full_url:
+            if full_url not in category_urls:
+                category_urls.append(full_url)
                     
     category_urls = sorted(list(set(category_urls)))
     
-    # 💡 STRICT BOT DIVISION (Yeh log aapne screen mein bhi dekhi hogi)
+    # 💡 STRICT BOT DIVISION 
     my_categories = category_urls[(bot_id - 1) :: TOTAL_BOTS]
-    print(f"📁 [BOT {bot_id}] Assigned {len(my_categories)} Main Category Folders to deeply scan.")
+    print(f"📁 [BOT {bot_id}] Assigned {len(my_categories)} Main Category Folders.")
     
     all_movie_links = set()
     visited_pages = set()
     
-    # 2. Categories ke andar ghus kar movies nikalna
+    # 2. Categories aur Year Folders ke andar ghus kar movies nikalna
     for cat_url in my_categories:
-        print(f"🕷️ [BOT {bot_id}] Crawling inside Category: {cat_url}")
+        print(f"🕷️ [BOT {bot_id}] Crawling Category & Year Folders: {cat_url}")
         to_visit = [cat_url]
         pages_crawled = 0
         
-        while to_visit and pages_crawled < 25: # Ab zyada gehrai tak jayega!
+        while to_visit and pages_crawled < 30: # Limit barha di taake saal wale folders miss na hon
             current_url = to_visit.pop(0)
             if current_url in visited_pages: continue
             visited_pages.add(current_url)
@@ -103,17 +101,15 @@ def crawl_filmyzilla_deep_categories(bot_id):
                 
                 for match in sub_matches:
                     shref = match.group(1)
-                    stext = match.group(2).lower()
                     sfull = urllib.parse.urljoin(BASE_DOMAIN, shref)
                     
-                    # Agar link movie ka hai
-                    if ("/movie/" in sfull or "-movie" in sfull) and sfull.endswith(".html") and "/category/" not in sfull:
-                        all_movie_links.add(sfull) 
-                    # Agar link kisi aur folder (category) ya next page ka hai, toh usay aagay scan karne ke liye add karo
-                    elif sfull.startswith(BASE_DOMAIN) and sfull not in visited_pages:
-                        if "/category/" in sfull or "page" in sfull.lower() or re.search(r'\b(20\d\d|19\d\d)\b', stext):
-                            if sfull not in to_visit:
-                                to_visit.append(sfull)
+                    if sfull.startswith(BASE_DOMAIN) and sfull.endswith(".html"):
+                        # Agar URL mein /category/ ya /default/ nahi hai, toh wo pakka MOVIE ka page hai!
+                        if "/category/" not in sfull and "/default/" not in sfull:
+                            all_movie_links.add(sfull)
+                        # Warna wo Year ka folder ya Next Page hai, uske andar jao
+                        elif sfull not in visited_pages and sfull not in to_visit:
+                            to_visit.append(sfull)
             except: pass
             
     sorted_movies = sorted(list(all_movie_links))
@@ -152,13 +148,12 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
             print(f"\n🎉 ==================================================")
             print(f"✅ [BOT {bot_id}] SUCCESS: {res_label} UPLOADED & SYNCED!")
             print(f"🎬 Movie: {meta['title']} [{res_label}]")
-            print(f"🔗 Link: {archive_link}")
             print(f"==================================================\n")
             
             try: 
                 os.remove(tp)
                 print(f"🗑️ [BOT {bot_id}] DISK CLEARED: File deleted locally!\n")
-            except Exception as e: pass
+            except Exception: pass
             return True
         else:
             print(f"❌ [BOT {bot_id}] Upload Failed!")
@@ -203,6 +198,10 @@ def run_bot():
     start_time = time.time()
     
     my_movies_links = crawl_filmyzilla_deep_categories(BOT_ID)
+
+    if not my_movies_links:
+        print(f"⚠️ [BOT {BOT_ID}] No movies found in assigned categories. Exiting gracefully.")
+        return
 
     for m_url in my_movies_links:
         if completed >= MAX_MOVIES_PER_RUN or (time.time() - start_time) > 20000: break 
@@ -263,6 +262,7 @@ def run_bot():
             "hindi_dubbed": True, "category": "Trending Movies"
         }
 
+        # 💡 Server 3/4 Priority
         for res_label, resolution_page_url in res_links.items():
             
             if existing_db_movie and existing_db_movie.get(f"url_{res_label}"):
@@ -277,12 +277,22 @@ def run_bot():
                 server_url = None
                 matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', res_resp.text, re.IGNORECASE | re.DOTALL)
                 
+                available_servers = {}
                 for match in matches:
                     href = match.group(1)
                     clean_text = re.sub(r'<[^>]+>', ' ', match.group(2)).replace('\n', ' ').strip().lower()
-                    if 'server' in clean_text:
-                        server_url = urllib.parse.urljoin(resolution_page_url, href)
-                        print(f"🖱️ [BOT {BOT_ID}] Selected: {clean_text.upper()}")
+                    if 'server 4' in clean_text: available_servers[4] = href
+                    elif 'server 3' in clean_text: available_servers[3] = href
+                    elif 'server 6' in clean_text: available_servers[6] = href
+                    elif 'server 5' in clean_text: available_servers[5] = href
+                    elif 'server 2' in clean_text: available_servers[2] = href
+                    elif 'server 1' in clean_text: available_servers[1] = href
+                
+                # Priority: Server 4, phir 3, phir baqi...
+                for s_num in [4, 3, 6, 5, 2, 1]:
+                    if s_num in available_servers:
+                        server_url = urllib.parse.urljoin(resolution_page_url, available_servers[s_num])
+                        print(f"🖱️ [BOT {BOT_ID}] Selected: SERVER {s_num}")
                         break
 
                 if server_url:
