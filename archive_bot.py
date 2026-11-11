@@ -13,12 +13,14 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
 BASE_DOMAIN = "https://www.filmyzilla82.com"
 
+# 💡 TOTAL 8 BOTS SUPPORT
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
+TOTAL_BOTS = 8
+
 IA_ACCESS = os.getenv(f"IA_ACCESS_{BOT_ID}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{BOT_ID}", "").strip()
 
-MAX_MOVIES_PER_RUN = 3
-TOTAL_BOTS = 4
+MAX_MOVIES_PER_RUN = 5
 
 # GLOBAL SESSION
 session = requests.Session()
@@ -83,13 +85,15 @@ def search_tmdb_from_title(raw_title):
     clean = re.sub(r'(?i)\bDownload\b', '', clean)
     clean = re.sub(r'(?i)in HD Filmyzilla', '', clean)
     clean = re.sub(r'(?i)Filmyzilla', '', clean)
+    clean = re.sub(r'(?i)Hindi Dubbed Free', '', clean)
+    clean = re.sub(r'(?i)English Movie', '', clean)
     clean = re.sub(r'(?i)(hindi dubbed|full movie|hdrip|bluray|web-dl|1080p|720p|480p).*', '', clean)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     clean = clean.replace('-', ' ').replace('_', ' ').strip()
     
     if not clean: return None
-    if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category']):
+    if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category', 'pages']):
         return None
         
     print(f"[TMDB] Searching title on TMDB: '{clean}'")
@@ -97,7 +101,6 @@ def search_tmdb_from_title(raw_title):
     try:
         res = requests.get(url, timeout=10)
         if res.status_code != 200:
-            print(f"❌ TMDB API Error: {res.status_code} - {res.text}")
             return None
             
         results = res.json().get("results", [])
@@ -112,13 +115,11 @@ def search_tmdb_from_title(raw_title):
             match['title'] = t
             match['release_date'] = d
             return match
-        else:
-            print(f"❌ No match found on TMDB for '{clean}'")
-            
     except Exception as e:
         print(f"❌ TMDB Exception: {e}")
     return None
 
+# 💡 SEQUENTIAL PIPELINE: Download ➔ Upload ➔ Sync ➔ DELETE immediately to save space!
 def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path):
     ext = os.path.splitext(f_path)[1].lower()
     if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
@@ -146,25 +147,28 @@ def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f
             requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
             print(f"✅ {res_label} Uploaded & Firebase Synced Successfully!")
             
+            # 💡 FORAN DELETE KARO TAKEY DISK FULL NA HO
             try:
                 os.remove(tp)
             except: pass
             
-            # 💡 SPAM FIX: Archive.org ko anti-spam delay (15 seconds) dena zaroori hai
-            print("⏳ Waiting 15 seconds to prevent Archive.org rate limit...")
-            time.sleep(15)
-            
             return True
         else:
-            print(f"❌ Archive.org Upload Failed for {res_label}! Status: {r[0].status_code if r else 'No Response'}")
+            print(f"❌ Archive.org Upload Failed for {res_label}!")
+            try:
+                os.remove(tp)
+            except: pass
             return False
             
     except Exception as e:
         print(f"❌ CRITICAL ERROR during Archive.org Upload for {res_label}: {e}")
+        try:
+            os.remove(tp)
+        except: pass
         return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Step 5: Aria2c Downloading REAL Video File (High Speed Mode) -> {url}")
+    print(f"Step 5: Aria2c Downloading Video File -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", "-j", "4", 
@@ -177,14 +181,11 @@ def download_with_aria2(url, work_dir, referer_url):
     
     for attempt in range(1, 4):
         try:
-            print(f"--> Download Attempt {attempt}...")
             subprocess.run(cmd, check=True, timeout=7200)
             break
         except subprocess.CalledProcessError:
-            print(f"⚠️ Server dropped connection. Resuming... (Attempt {attempt}/3)")
             time.sleep(3)
-        except Exception as e:
-            print(f"Aria2 download failed: {e}")
+        except Exception:
             break
             
     for root, dirs, files in os.walk(work_dir):
@@ -195,7 +196,7 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 def run_bot():
-    print(f"Starting Crash-Free Human Flow Bot ID: {BOT_ID}")
+    print(f"🚀 Starting 8-Bot Cluster - Bot ID: {BOT_ID} of {TOTAL_BOTS}")
     
     if BOT_ID == 1:
         fix_existing_firebase_links()
@@ -203,7 +204,7 @@ def run_bot():
     completed = 0
     start_time = time.time()
     
-    print(f"Step 1: Opening Home Page -> {BASE_DOMAIN}")
+    print(f"Step 1: Opening Main Categories -> {BASE_DOMAIN}")
     try:
         resp = session.get(BASE_DOMAIN, timeout=25)
     except Exception as e:
@@ -218,16 +219,17 @@ def run_bot():
             if abs_url not in all_movie_pages:
                 all_movie_pages.append(abs_url)
 
+    # 💡 8 BOTS WORKLOAD DIVISION
     chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS) if all_movie_pages else 1
     start_idx = (BOT_ID - 1) * chunk_size
     end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
     my_movie_pages = all_movie_pages[start_idx:end_idx] if all_movie_pages else []
-    print(f"Bot {BOT_ID} assigned {len(my_movie_pages)} movies.")
+    print(f"Bot {BOT_ID} assigned {len(my_movie_pages)} movies from its partition.")
 
     for m_url in my_movie_pages:
         if completed >= MAX_MOVIES_PER_RUN or (time.time() - start_time) > 20000: break 
 
-        print(f"\nStep 2: Clicking on Movie -> {m_url}")
+        print(f"\nStep 2: Processing Movie -> {m_url}")
         try:
             session.headers.update({"Referer": BASE_DOMAIN})
             m_resp = session.get(m_url, timeout=25)
@@ -241,7 +243,7 @@ def run_bot():
             
         tmdb_id = str(tmdb_data["id"])
         if is_fully_in_firebase(tmdb_id):
-            print(f"Movie pehle se Firebase me hai. Next...")
+            print(f"Movie ID {tmdb_id} already fully saved in Firebase. Skipping...")
             continue
         
         res_links = {}
@@ -267,8 +269,9 @@ def run_bot():
             "hindi_dubbed": True, "category": "Latest Updates"
         }
 
+        # 💡 SEQUENTIAL RESOLUTION LOOP (Download ➔ Upload ➔ Delete ➔ Next)
         for res_label, resolution_page_url in res_links.items():
-            print(f"Step 3: Clicking on Resolution {res_label} -> {resolution_page_url}")
+            print(f"Step 3: Processing Resolution {res_label} -> {resolution_page_url}")
             try:
                 session.headers.update({"Referer": m_url})
                 res_resp = session.get(resolution_page_url, timeout=25)
@@ -290,35 +293,27 @@ def run_bot():
                 for s_num in [4, 3, 6, 5, 2, 1]:
                     if s_num in available_servers:
                         server_url = urllib.parse.urljoin(resolution_page_url, available_servers[s_num])
-                        print(f"--> Found 'Server {s_num}' button! Redirect Link: {server_url}")
                         break
                         
                 if server_url:
-                    print(f"Step 4: Opening Redirect Page to extract actual file...")
                     session.headers.update({"Referer": resolution_page_url})
-                    
                     final_page_resp = session.get(server_url, timeout=30, stream=True)
                     real_mkv_url = final_page_resp.url 
                     final_page_resp.close() 
                     
                     if real_mkv_url:
-                        print(f"--> Success! Found Real Video Link: {real_mkv_url}")
                         f_path = download_with_aria2(real_mkv_url, wd, final_page_resp.url)
-                        
                         if f_path: 
                             upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path)
                     
                     time.sleep(2) 
-                else:
-                    print(f"❌ ERROR: Is page par red server buttons nahi milay!")
-                    
             except Exception as e:
-                print(f"❌ Failed download step for {res_label}: {e}")
+                print(f"❌ Failed step for {res_label}: {e}")
 
         completed += 1
         shutil.rmtree(wd, ignore_errors=True)
 
-    print("Bot run completed.")
+    print("Bot run completed successfully.")
 
 if __name__ == "__main__":
     run_bot()
