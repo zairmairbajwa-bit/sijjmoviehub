@@ -1,9 +1,9 @@
 name: SijjMoviesHub 8-Bot Cluster
 
 on:
-  workflow_dispatch: # Manual start button ke liye
+  workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *' # Har 30 minute baad auto-run karne ke liye (Aap isay badal sakte hain)
+    - cron: '*/30 * * * *'
 
 jobs:
   run-bots:
@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         bot_id: [1, 2, 3, 4, 5, 6, 7, 8]
-      fail-fast: false # Bohat zaroori: Agar ek bot ruke toh baqi 7 apna kaam karte rahein!
+      fail-fast: false
 
     steps:
       - name: Checkout Repository
@@ -22,14 +22,13 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies (Aria2 for High Speed)
+      - name: Install System Dependencies (Aria2 with Timeout Protection)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get clean
-          # Agar GitHub ka server down bhi ho toh error ignore kar ke aagay barh jaye (|| true)
-          sudo apt-get update -qq -y || true
-          sudo apt-get install -yqq aria2
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo timeout 30s apt-get update -qq || true
+          sudo timeout 30s apt-get install -yqq aria2 || true
 
       - name: Install Python Dependencies
         run: |
@@ -41,7 +40,6 @@ jobs:
           BOT_ID: ${{ matrix.bot_id }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
-          # 4 Accounts ki keys
           IA_ACCESS_1: ${{ secrets.IA_ACCESS_1 }}
           IA_SECRET_1: ${{ secrets.IA_SECRET_1 }}
           IA_ACCESS_2: ${{ secrets.IA_ACCESS_2 }}
