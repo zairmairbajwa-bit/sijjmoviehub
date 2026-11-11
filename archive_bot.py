@@ -21,7 +21,7 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-MAX_MOVIES_PER_RUN = 10
+MAX_MOVIES_PER_RUN = 6
 
 session = requests.Session()
 session.headers.update({
@@ -35,7 +35,7 @@ def clean_filename(name):
     return re.sub(r'_+', '_', cleaned).strip('_')
 
 def fix_existing_firebase_links():
-    print("[MIGRATION] Checking database for old messy names to fix...")
+    print("[MIGRATION] Checking database for old messy names...")
     try:
         res = requests.get(f"{FIREBASE_URL}/movies.json", timeout=15)
         if res.status_code == 200 and res.json():
@@ -74,12 +74,13 @@ def is_in_firebase(tmdb_id):
         pass
     return False
 
+# 💡 STRICT TMDB PAGE DIVISION FOR 8 BOTS (No Overlapping!)
 def fetch_movies_from_tmdb_pages(bot_id):
     movie_titles_to_search = []
-    start_page = ((bot_id - 1) * 3) + random.randint(1, 3)
-    end_page = start_page + 2
+    start_page = ((bot_id - 1) * 2) + 1
+    end_page = start_page + 1
     
-    print(f"[TMDB] Bot {bot_id} fetching from TMDB pages {start_page} to {end_page}...")
+    print(f"[TMDB] Bot {bot_id} assigned strict TMDB pages: {start_page} to {end_page}")
     
     for page in range(start_page, end_page + 1):
         url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=hi&page={page}"
@@ -94,7 +95,6 @@ def fetch_movies_from_tmdb_pages(bot_id):
         except Exception as e:
             print(f"❌ TMDB Error: {e}")
             
-    random.shuffle(movie_titles_to_search)
     return movie_titles_to_search
 
 def search_on_filmyzilla(movie_title):
@@ -152,8 +152,7 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path):
             print(f"🔗 Link: {archive_link}")
             print(f"==================================================\n")
             
-            try:
-                os.remove(tp)
+            try: os.remove(tp)
             except: pass
             return True
         else:
@@ -167,26 +166,24 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path):
         except: pass
         return False
 
+# 💡 OPTIMAL 4 CONNECTIONS (-x4 -s4) FOR HIGH SPEED & STABILITY
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"📥 [HIGH SPEED DOWNLOAD] Starting Aria2c -> {url}")
+    print(f"📥 [HIGH SPEED DOWNLOAD] Starting Aria2c (4 Connections) -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
-        "-x", "16", "-s", "16", "-j", "4", 
-        "-c", "--max-tries=5", "--retry-wait=2", 
+        "-x", "4", "-s", "4", "-j", "4",
+        "-c", "--max-tries=5", "--retry-wait=3", 
         "--min-split-size=5M",
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
         "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         url
     ]
     
-    for attempt in range(1, 4):
-        try:
-            subprocess.run(cmd, check=True, timeout=7200)
-            break
-        except subprocess.CalledProcessError:
-            time.sleep(3)
-        except Exception:
-            break
+    try:
+        subprocess.run(cmd, check=True, timeout=7200)
+    except Exception as e:
+        print(f"❌ Aria2c download error: {e}")
+        return None
             
     for root, dirs, files in os.walk(work_dir):
         for file in files:
@@ -195,7 +192,7 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 def run_bot():
-    print(f"🚀 Starting Fast Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
+    print(f"🚀 Starting Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
     
     if BOT_ID == 1:
         fix_existing_firebase_links()
@@ -232,7 +229,7 @@ def run_bot():
             
         tmdb_id = str(tmdb_data["id"])
         if is_in_firebase(tmdb_id):
-            print(f"⏩ Movie ID {tmdb_id} already in Firebase. Skipping to next movie...")
+            print(f"⏩ Movie ID {tmdb_id} already in Firebase. Skipping...")
             continue
         
         res_links = {}
@@ -245,7 +242,6 @@ def run_bot():
 
         if not res_links: continue
 
-        # Sirf pehli available fast resolution uthao taake foran upload ho kar agli movie par jayein
         res_label, resolution_page_url = list(res_links.items())[0]
 
         wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
