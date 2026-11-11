@@ -13,16 +13,15 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
 BASE_DOMAIN = "https://www.filmyzilla82.com"
 
-# 💡 TOTAL 8 BOTS SUPPORT & ACCOUNT MAPPING (Shared across 4 accounts safely)
+# 💡 TOTAL 8 BOTS (7 Background Workers + 1 Live On-Demand Bot)
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 TOTAL_BOTS = 8
 
-# Account sharing mapping: Bot 1&5 -> Acc 1, Bot 2&6 -> Acc 2, etc.
 actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-MAX_MOVIES_PER_RUN = 6
+MAX_MOVIES_PER_RUN = 5
 
 # GLOBAL SESSION
 session = requests.Session()
@@ -82,46 +81,56 @@ def is_fully_in_firebase(tmdb_id):
         pass
     return False
 
-def search_tmdb_from_title(raw_title):
-    clean = raw_title
-    clean = re.sub(r'(?i)\bDownload\b', '', clean)
-    clean = re.sub(r'(?i)in HD Filmyzilla', '', clean)
-    clean = re.sub(r'(?i)Filmyzilla', '', clean)
-    clean = re.sub(r'(?i)Hindi Dubbed Free', '', clean)
-    clean = re.sub(r'(?i)English Movie', '', clean)
-    clean = re.sub(r'(?i)(hindi dubbed|full movie|hdrip|bluray|web-dl|1080p|720p|480p).*', '', clean)
-    clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
-    clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
-    clean = clean.replace('-', ' ').replace('_', ' ').strip()
+# 💡 1. TMDB PAGES SE FRESH MOVIES KE NAAM UTHANE KA FUNCTION (Har bot ke liye alag page range)
+def fetch_movies_from_tmdb_pages(bot_id):
+    movie_titles_to_search = []
+    # Har bot TMDB ke alag-alag pages (jaise Bot 1 -> Pages 1-3, Bot 2 -> Pages 4-6...) target karega
+    start_page = ((bot_id - 1) * 3) + 1
+    end_page = start_page + 2
     
-    if not clean: return None
-    if any(skip in clean.lower() for skip in ['latest', 'bengali', 'hollywood', 'bollywood', 'category', 'pages']):
-        return None
-        
-    print(f"[TMDB] Searching title on TMDB: '{clean}'")
-    url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean)}&language=hi"
+    print(f"[TMDB] Bot {bot_id} fetching movie titles from TMDB pages {start_page} to {end_page}...")
+    
+    for page in range(start_page, end_page + 1):
+        url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=hi&page={page}"
+        try:
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                results = res.json().get("results", [])
+                for item in results:
+                    title = item.get("title") or item.get("name")
+                    if title and title not in movie_titles_to_search:
+                        movie_titles_to_search.append(title)
+        except Exception as e:
+            print(f"❌ TMDB Page fetch error: {e}")
+            
+    print(f"[TMDB] Collected {len(movie_titles_to_search)} titles from TMDB pages for Bot {bot_id}.")
+    return movie_titles_to_search
+
+# 💡 2. FILMYZILLA PAR TMDB KE NAAM SE SEARCH KARNE KA FUNCTION
+def search_on_filmyzilla(movie_title):
+    clean_query = re.sub(r'[^a-zA-Z0-9\s]', '', movie_title).strip()
+    search_url = f"{BASE_DOMAIN}/search.html?q={urllib.parse.quote(clean_query)}"
+    print(f"[FILMYZILLA] Searching for: '{clean_query}' -> {search_url}")
+    
     try:
-        res = requests.get(url, timeout=10)
-        if res.status_code != 200:
-            return None
-            
-        results = res.json().get("results", [])
-        valid_results = [r for r in results if r.get("media_type") in ["movie", "tv"]]
-        
-        if valid_results:
-            match = valid_results[0]
-            t = match.get('title') or match.get('name', 'Unknown')
-            d = match.get('release_date') or match.get('first_air_date', '')
-            print(f"[TMDB] Match Found! {t} ({d})")
-            
-            match['title'] = t
-            match['release_date'] = d
-            return match
+        session.headers.update({"Referer": BASE_DOMAIN})
+        resp = session.get(search_url, timeout=20)
+        if resp.status_code == 200:
+            movie_pages = []
+            hrefs = re.findall(r'href=["\'](.*?)["\']', resp.text)
+            for href in hrefs:
+                abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
+                if "/movie/" in abs_url and abs_url.endswith(".html"):
+                    if abs_url not in movie_pages:
+                        movie_pages.append(abs_url)
+            if movie_pages:
+                print(f"[FILMYZILLA] Found matching page: {movie_pages[0]}")
+                return movie_pages[0]
     except Exception as e:
-        print(f"❌ TMDB Exception: {e}")
+        print(f"❌ FilmyZilla search error: {e}")
     return None
 
-# 💡 SMART SEQUENTIAL PIPELINE WITH ANTI-CLASH DELAY FOR SHARED ACCOUNTS
+# 💡 3. SEQUENTIAL PIPELINE WITH CLEAR LOGGING
 def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path):
     ext = os.path.splitext(f_path)[1].lower()
     if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
@@ -133,9 +142,7 @@ def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f
     if f_path != tp:
         shutil.move(f_path, tp)
         
-    print(f"Uploading {res_label} file to Archive.org (Account ID: {actual_bot_account_id})...")
-    
-    # Smart anti-clash pause if sharing same account
+    print(f"🚀 [UPLOAD START] Uploading {res_label} file to Archive.org (Account #{actual_bot_account_id})...")
     time.sleep(BOT_ID * 2) 
     
     try:
@@ -151,31 +158,30 @@ def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f
             meta["stream_url"] = archive_link
             
             requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
-            print(f"✅ {res_label} Uploaded & Firebase Synced Successfully!")
+            print(f"✅ [SUCCESS] {res_label} Successfully Uploaded to Archive.org and Synced to Firebase Database! Link: {archive_link}")
             
             try:
                 os.remove(tp)
             except: pass
             
-            # Safe buffer between uploads
             time.sleep(5)
             return True
         else:
-            print(f"❌ Archive.org Upload Failed for {res_label}!")
+            print(f"❌ [FAILED] Archive.org Upload Failed for {res_label}!")
             try:
                 os.remove(tp)
             except: pass
             return False
             
     except Exception as e:
-        print(f"❌ CRITICAL ERROR during Archive.org Upload for {res_label}: {e}")
+        print(f"❌ [ERROR] CRITICAL ERROR during Archive.org Upload for {res_label}: {e}")
         try:
             os.remove(tp)
         except: pass
         return False
 
 def download_with_aria2(url, work_dir, referer_url):
-    print(f"Step 5: Aria2c Downloading Video File -> {url}")
+    print(f"📥 [ARIA2C] Downloading Video File at High Speed -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", "-j", "4", 
@@ -203,54 +209,51 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 def run_bot():
-    print(f"🚀 Starting Smart 8-Bot Cluster - Bot ID: {BOT_ID} (Linked to Archive Account #{actual_bot_account_id})")
+    print(f"🚀 Starting TMDB-Driven 8-Bot Cluster - Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
     
     if BOT_ID == 1:
         fix_existing_firebase_links()
         
+    # 💡 BOT 8 IS RESERVED AS FREE ON-DEMAND WATCHER FOR USER REQUESTS
+    if BOT_ID == 8:
+        print("🤖 Bot 8 is running in Live On-Demand Watcher mode for app users...")
+        time.sleep(10)
+        return
+
     completed = 0
     start_time = time.time()
     
-    print(f"Step 1: Opening Main Categories -> {BASE_DOMAIN}")
-    try:
-        resp = session.get(BASE_DOMAIN, timeout=25)
-    except Exception as e:
-        print(f"Home page fetch failed: {e}")
-        return
+    # Get movie titles from TMDB pages assigned to this bot
+    tmdb_titles = fetch_movies_from_tmdb_pages(BOT_ID)
 
-    all_movie_pages = []
-    hrefs = re.findall(r'href=["\'](.*?)["\']', resp.text)
-    for href in hrefs:
-        abs_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-        if "/movie/" in abs_url and abs_url.endswith(".html"):
-            if abs_url not in all_movie_pages:
-                all_movie_pages.append(abs_url)
-
-    # 💡 8 BOTS WORKLOAD DIVISION
-    chunk_size = max(1, len(all_movie_pages) // TOTAL_BOTS) if all_movie_pages else 1
-    start_idx = (BOT_ID - 1) * chunk_size
-    end_idx = start_idx + chunk_size if BOT_ID < TOTAL_BOTS else len(all_movie_pages)
-    my_movie_pages = all_movie_pages[start_idx:end_idx] if all_movie_pages else []
-    print(f"Bot {BOT_ID} assigned {len(my_movie_pages)} movies from its partition.")
-
-    for m_url in my_movie_pages:
+    for title_query in tmdb_titles:
         if completed >= MAX_MOVIES_PER_RUN or (time.time() - start_time) > 20000: break 
 
-        print(f"\nStep 2: Processing Movie -> {m_url}")
+        print(f"\n🔍 Searching FilmyZilla for TMDB title: '{title_query}'")
+        m_url = search_on_filmyzilla(title_query)
+        if not m_url: continue
+
+        print(f"🎬 Processing Movie Page -> {m_url}")
         try:
             session.headers.update({"Referer": BASE_DOMAIN})
             m_resp = session.get(m_url, timeout=25)
         except Exception: continue
         
         title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
-        raw_title = title_match.group(1) if title_match else "Unknown"
+        raw_title = title_match.group(1) if title_match else title_query
         
-        tmdb_data = search_tmdb_from_title(raw_title)
-        if not tmdb_data: continue
+        # Verify with TMDB details
+        url_tmdb = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(title_query)}&language=hi"
+        try:
+            t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
+            valid = [r for r in t_res if r.get("media_type") in ["movie", "tv"]]
+            if not valid: continue
+            tmdb_data = valid[0]
+        except: continue
             
         tmdb_id = str(tmdb_data["id"])
         if is_fully_in_firebase(tmdb_id):
-            print(f"Movie ID {tmdb_id} already fully saved in Firebase. Skipping...")
+            print(f"⏩ Movie ID {tmdb_id} already fully saved in Firebase. Skipping...")
             continue
         
         res_links = {}
@@ -266,19 +269,20 @@ def run_bot():
         wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
         os.makedirs(wd, exist_ok=True)
         
-        release_year = tmdb_data.get("release_date", "2026")[:4]
+        t_name = tmdb_data.get('title') or tmdb_data.get('name', 'Untitled')
+        release_year = str(tmdb_data.get('release_date') or tmdb_data.get('first_air_date', '2026'))[:4]
         ident = f"sijjhub-media-{tmdb_id}-{int(time.time())}"
-        title = tmdb_data.get("title", "Untitled")
+        
         meta = {
-            "tmdb_id": tmdb_id, "id": tmdb_id, "title": title, 
-            "overview": tmdb_data.get("overview", ""), "release_date": tmdb_data.get("release_date", ""), 
+            "tmdb_id": tmdb_id, "id": tmdb_id, "title": t_name, 
+            "overview": tmdb_data.get("overview", ""), "release_date": release_year, 
             "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
-            "hindi_dubbed": True, "category": "Latest Updates"
+            "hindi_dubbed": True, "category": "Trending Hollywood & Bollywood"
         }
 
-        # 💡 SEQUENTIAL RESOLUTION LOOP WITH SMART ACCOUNT SHARING
+        # 💡 SEQUENTIAL RESOLUTION PIPELINE
         for res_label, resolution_page_url in res_links.items():
-            print(f"Step 3: Processing Resolution {res_label} -> {resolution_page_url}")
+            print(f"⚙️ Processing Resolution {res_label} -> {resolution_page_url}")
             try:
                 session.headers.update({"Referer": m_url})
                 res_resp = session.get(resolution_page_url, timeout=25)
