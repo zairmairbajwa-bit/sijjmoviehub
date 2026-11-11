@@ -13,14 +13,16 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
 BASE_DOMAIN = "https://www.filmyzilla82.com"
 
-# 💡 TOTAL 8 BOTS SUPPORT
+# 💡 TOTAL 8 BOTS SUPPORT & ACCOUNT MAPPING (Shared across 4 accounts safely)
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 TOTAL_BOTS = 8
 
-IA_ACCESS = os.getenv(f"IA_ACCESS_{BOT_ID}", "").strip()
-IA_SECRET = os.getenv(f"IA_SECRET_{BOT_ID}", "").strip()
+# Account sharing mapping: Bot 1&5 -> Acc 1, Bot 2&6 -> Acc 2, etc.
+actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
+IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
+IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-MAX_MOVIES_PER_RUN = 5
+MAX_MOVIES_PER_RUN = 6
 
 # GLOBAL SESSION
 session = requests.Session()
@@ -119,7 +121,7 @@ def search_tmdb_from_title(raw_title):
         print(f"❌ TMDB Exception: {e}")
     return None
 
-# 💡 SEQUENTIAL PIPELINE: Download ➔ Upload ➔ Sync ➔ DELETE immediately to save space!
+# 💡 SMART SEQUENTIAL PIPELINE WITH ANTI-CLASH DELAY FOR SHARED ACCOUNTS
 def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path):
     ext = os.path.splitext(f_path)[1].lower()
     if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
@@ -131,7 +133,11 @@ def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f
     if f_path != tp:
         shutil.move(f_path, tp)
         
-    print(f"Uploading {res_label} file to Archive.org immediately...")
+    print(f"Uploading {res_label} file to Archive.org (Account ID: {actual_bot_account_id})...")
+    
+    # Smart anti-clash pause if sharing same account
+    time.sleep(BOT_ID * 2) 
+    
     try:
         r = ia.upload(
             ident, files=[tp], 
@@ -147,11 +153,12 @@ def upload_single_file_and_sync(meta, tmdb_id, release_year, ident, res_label, f
             requests.put(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
             print(f"✅ {res_label} Uploaded & Firebase Synced Successfully!")
             
-            # 💡 FORAN DELETE KARO TAKEY DISK FULL NA HO
             try:
                 os.remove(tp)
             except: pass
             
+            # Safe buffer between uploads
+            time.sleep(5)
             return True
         else:
             print(f"❌ Archive.org Upload Failed for {res_label}!")
@@ -196,7 +203,7 @@ def download_with_aria2(url, work_dir, referer_url):
     return None
 
 def run_bot():
-    print(f"🚀 Starting 8-Bot Cluster - Bot ID: {BOT_ID} of {TOTAL_BOTS}")
+    print(f"🚀 Starting Smart 8-Bot Cluster - Bot ID: {BOT_ID} (Linked to Archive Account #{actual_bot_account_id})")
     
     if BOT_ID == 1:
         fix_existing_firebase_links()
@@ -269,7 +276,7 @@ def run_bot():
             "hindi_dubbed": True, "category": "Latest Updates"
         }
 
-        # 💡 SEQUENTIAL RESOLUTION LOOP (Download ➔ Upload ➔ Delete ➔ Next)
+        # 💡 SEQUENTIAL RESOLUTION LOOP WITH SMART ACCOUNT SHARING
         for res_label, resolution_page_url in res_links.items():
             print(f"Step 3: Processing Resolution {res_label} -> {resolution_page_url}")
             try:
