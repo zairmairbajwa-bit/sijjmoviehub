@@ -155,13 +155,13 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
         except: pass
         return False
 
+# 💡 STABLE SINGLE-CONNECTION HIGH-SPEED DOWNLOAD (Google Server Compatible)
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
-    print(f"📥 [BOT {bot_id}] Downloading {res_label} (8 Connections) -> {url}")
+    print(f"📥 [BOT {bot_id}] Downloading {res_label} (High-Speed Stream Mode) -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
-        "-x", "8", "-s", "8", "-j", "8",
+        "-x", "1", "-s", "1", # Single connection to bypass Google range header error
         "-c", "--max-tries=10", "--retry-wait=2", 
-        "--min-split-size=5M",
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
         "--header=User-Agent: Mozilla/5.0",
         url
@@ -231,7 +231,6 @@ def run_bot():
                     continue
         except: pass
 
-        # 💡 MOVIE PAGE SE DIRECT 3 RESOLUTION LINKS UTHANA
         print(f"✅ [BOT {BOT_ID}] Extracting Resolution Download Links...")
         res_links = {}
         m_hrefs = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL)
@@ -260,9 +259,8 @@ def run_bot():
             "hindi_dubbed": True, "category": "Trending Movies"
         }
 
-        # 💡 DIRECT DOWNLOAD & UPLOAD
         for res_label, direct_download_url in res_links.items():
-            print(f"\n⚙️ [BOT {BOT_ID}] Downloading {res_label} directly...")
+            print(f"\n⚙️ [BOT {BOT_ID}] Downloading {res_label}...")
             try:
                 f_path = download_with_aria2(direct_download_url, wd, m_url, BOT_ID, res_label)
                 if f_path: 
