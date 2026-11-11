@@ -12,7 +12,7 @@ import random
 # === SECURE CREDENTIALS ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
-BASE_DOMAIN = "https://www.filmyzilla82.com"
+BASE_DOMAIN = "https://filmicity.in" # Naya working domain!
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 TOTAL_BOTS = 8
@@ -52,9 +52,9 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-# 💡 PERFECTED SPIDER (Category -> Year Folder -> Movie)
+# 💡 PERFECTED DEEP SPIDER CRAWLER
 def crawl_filmyzilla_deep_categories(bot_id):
-    print(f"🕸️ [BOT {bot_id}] Initiating DEEP SPIDER CRAWL on FilmyZilla Categories & Years...")
+    print(f"🕸️ [BOT {bot_id}] Initiating DEEP SPIDER CRAWL on {BASE_DOMAIN} Categories & Years...")
     
     try:
         r = session.get(BASE_DOMAIN, timeout=15)
@@ -64,13 +64,13 @@ def crawl_filmyzilla_deep_categories(bot_id):
         
     category_urls = []
     
-    # 1. Main Categories Jama Karna
-    matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', r.text, re.IGNORECASE)
+    matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', r.text, re.IGNORECASE)
     for match in matches:
         href = match.group(1)
         full_url = urllib.parse.urljoin(BASE_DOMAIN, href)
         
-        if full_url.startswith(BASE_DOMAIN) and "/category/" in full_url:
+        # Har category ko list mein daalo
+        if full_url.startswith(BASE_DOMAIN) and "/category/" in full_url.lower():
             if full_url not in category_urls:
                 category_urls.append(full_url)
                     
@@ -83,38 +83,42 @@ def crawl_filmyzilla_deep_categories(bot_id):
     all_movie_links = set()
     visited_pages = set()
     
-    # 2. Categories aur Year Folders ke andar ghus kar movies nikalna
     for cat_url in my_categories:
-        print(f"🕷️ [BOT {bot_id}] Crawling Category & Year Folders: {cat_url}")
+        print(f"\n🕷️ [BOT {bot_id}] Entering Main Folder: {cat_url}")
         to_visit = [cat_url]
         pages_crawled = 0
         
-        while to_visit and pages_crawled < 30: # Limit barha di taake saal wale folders miss na hon
+        while to_visit and pages_crawled < 25: 
             current_url = to_visit.pop(0)
             if current_url in visited_pages: continue
             visited_pages.add(current_url)
             pages_crawled += 1
             
+            print(f"  -> 🔍 Scanning: {current_url}")
+            
             try:
                 resp = session.get(current_url, timeout=15)
-                sub_matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE)
+                sub_matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE)
                 
                 for match in sub_matches:
                     shref = match.group(1)
                     sfull = urllib.parse.urljoin(BASE_DOMAIN, shref)
                     
-                    if sfull.startswith(BASE_DOMAIN) and sfull.endswith(".html"):
-                        # Agar URL mein /category/ ya /default/ nahi hai, toh wo pakka MOVIE ka page hai!
-                        if "/category/" not in sfull and "/default/" not in sfull:
-                            all_movie_links.add(sfull)
-                        # Warna wo Year ka folder ya Next Page hai, uske andar jao
-                        elif sfull not in visited_pages and sfull not in to_visit:
+                    if not sfull.startswith(BASE_DOMAIN): continue
+                    
+                    # Agar link mein /movie/ hai ya direct HTML page hai (without category/default)
+                    if "/movie/" in sfull.lower() or (sfull.endswith(".html") and "/category/" not in sfull.lower() and "/default/" not in sfull.lower()):
+                        all_movie_links.add(sfull)
+                        
+                    # Agar yeh aagay mazeed koi folder/year hai
+                    elif "/category/" in sfull.lower() or "/default/" in sfull.lower():
+                        if sfull not in visited_pages and sfull not in to_visit:
                             to_visit.append(sfull)
             except: pass
             
     sorted_movies = sorted(list(all_movie_links))
     sorted_movies.reverse() 
-    print(f"🎯 [BOT {bot_id}] Extraction Complete! Found {len(sorted_movies)} Unique Movie Links.")
+    print(f"\n🎯 [BOT {bot_id}] Extraction Complete! Found {len(sorted_movies)} Unique Movie Links.")
     return sorted_movies
 
 def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_id):
@@ -167,7 +171,7 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
         return False
 
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
-    print(f"📥 [BOT {bot_id}] Downloading {res_label} (8 Connections) -> {url}")
+    print(f"📥 [BOT {bot_id}] Downloading {res_label} Directly (8 Connections) -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "8", "-s", "8", "-j", "8",
@@ -237,9 +241,10 @@ def run_bot():
                 print(f"⏩ [BOT {BOT_ID}] All resolutions exist in Firebase! Skipping...")
                 continue
 
-        print(f"✅ [BOT {BOT_ID}] Step 3: Extracting Resolution Servers...")
+        print(f"✅ [BOT {BOT_ID}] Step 3: Extracting Direct Download Links...")
         res_links = {}
         m_hrefs = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL)
+        
         for href, text in m_hrefs:
             t_low = text.lower()
             if "720p" in t_low: res_links["720p"] = urllib.parse.urljoin(BASE_DOMAIN, href)
@@ -262,51 +267,22 @@ def run_bot():
             "hindi_dubbed": True, "category": "Trending Movies"
         }
 
-        # 💡 Server 3/4 Priority
-        for res_label, resolution_page_url in res_links.items():
+        # 💡 NAYA STEP 4: Seedha Download! (Koi server find nahi karna ab)
+        for res_label, direct_download_url in res_links.items():
             
             if existing_db_movie and existing_db_movie.get(f"url_{res_label}"):
                 print(f"⏩ [BOT {BOT_ID}] SKIPPING {res_label}: Already in Firebase!")
                 continue
                 
-            print(f"\n⚙️ [BOT {BOT_ID}] Step 4: Resolving {res_label} Server Link...")
+            print(f"\n⚙️ [BOT {BOT_ID}] Step 4: Initiating Direct Download for {res_label}...")
             try:
-                session.headers.update({"Referer": m_url})
-                res_resp = session.get(resolution_page_url, timeout=25)
+                # Direct aria2c ko link pakra diya hai
+                f_path = download_with_aria2(direct_download_url, wd, m_url, BOT_ID, res_label)
                 
-                server_url = None
-                matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', res_resp.text, re.IGNORECASE | re.DOTALL)
+                if f_path: 
+                    upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, BOT_ID)
                 
-                available_servers = {}
-                for match in matches:
-                    href = match.group(1)
-                    clean_text = re.sub(r'<[^>]+>', ' ', match.group(2)).replace('\n', ' ').strip().lower()
-                    if 'server 4' in clean_text: available_servers[4] = href
-                    elif 'server 3' in clean_text: available_servers[3] = href
-                    elif 'server 6' in clean_text: available_servers[6] = href
-                    elif 'server 5' in clean_text: available_servers[5] = href
-                    elif 'server 2' in clean_text: available_servers[2] = href
-                    elif 'server 1' in clean_text: available_servers[1] = href
-                
-                # Priority: Server 4, phir 3, phir baqi...
-                for s_num in [4, 3, 6, 5, 2, 1]:
-                    if s_num in available_servers:
-                        server_url = urllib.parse.urljoin(resolution_page_url, available_servers[s_num])
-                        print(f"🖱️ [BOT {BOT_ID}] Selected: SERVER {s_num}")
-                        break
-
-                if server_url:
-                    session.headers.update({"Referer": resolution_page_url})
-                    final_page_resp = session.get(server_url, timeout=30, stream=True)
-                    real_mkv_url = final_page_resp.url 
-                    final_page_resp.close() 
-                    
-                    if real_mkv_url:
-                        f_path = download_with_aria2(real_mkv_url, wd, final_page_resp.url, BOT_ID, res_label)
-                        if f_path: 
-                            upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, BOT_ID)
-                    
-                    time.sleep(1) 
+                time.sleep(1) 
             except Exception as e:
                 print(f"❌ [BOT {BOT_ID}] Error in {res_label}: {e}")
 
