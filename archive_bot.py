@@ -39,37 +39,30 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'(?i)in HD Filmyzilla.*', '', clean)
     clean = re.sub(r'(?i)Filmyzilla', '', clean)
     clean = re.sub(r'(?i)Hindi Dubbed.*', '', clean)
-    clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|1080p|720p|480p|hevc|esub).*', '', clean)
+    clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|1080p|720p|480p|hevc|esub|dual audio).*', '', clean)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-# 💡 BOT 1: Front Page (Latest Updates / Trending)
+# 💡 BOT 1: Front Page & Latest Updates
 def get_front_page_movies():
     movie_links = set()
-    print(f"🔥 [BOT 1] Scraping FRONT PAGE (Trending / Latest Updates)...")
-    
-    # Homepage aur aglay pages se movies uthana
+    print(f"🔥 [BOT 1] Scraping Front Page for Latest Movies...")
     for page in range(1, 4):
         url = BASE_DOMAIN if page == 1 else f"{BASE_DOMAIN}/page/{page}/"
         try:
             resp = session.get(url, timeout=15)
             if resp.status_code == 200:
-                # Website ke saare .html links jo movie pages ho sakte hain
-                matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL)
+                matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>', resp.text, re.IGNORECASE)
                 for match in matches:
                     href = match.group(1)
                     full_url = urllib.parse.urljoin(BASE_DOMAIN, href)
                     if "/movie/" in full_url.lower() or ("-" in full_url and "page" not in full_url and "category" not in full_url and "index" not in full_url):
                         movie_links.add(full_url)
-        except Exception as e:
-            print(f"⚠️ Front page error: {e}")
-            
-    links = list(movie_links)
-    print(f"🎯 [BOT 1] Found {len(links)} movies from Front Page.")
-    return links
+        except: pass
+    return list(movie_links)
 
-# 💡 BOTS 2-7: Categories & Year Folders Crawler
+# 💡 BOTS 2-7: Category & Year Folders
 def get_category_year_movies(bot_id):
     print(f"📁 [BOT {bot_id}] Crawling Category & Year Folders...")
     try:
@@ -92,11 +85,9 @@ def get_category_year_movies(bot_id):
     visited_pages = set()
     
     for cat_url in my_categories:
-        print(f"🕷️ [BOT {bot_id}] Entering Category: {cat_url}")
         to_visit = [cat_url]
         pages_crawled = 0
-        
-        while to_visit and pages_crawled < 20:
+        while to_visit and pages_crawled < 15:
             current_url = to_visit.pop(0)
             if current_url in visited_pages: continue
             visited_pages.add(current_url)
@@ -105,7 +96,6 @@ def get_category_year_movies(bot_id):
             try:
                 resp = session.get(current_url, timeout=15)
                 sub_matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE)
-                
                 for match in sub_matches:
                     shref = match.group(1)
                     sfull = urllib.parse.urljoin(BASE_DOMAIN, shref)
@@ -153,24 +143,20 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
             print(f"🎬 Movie: {meta['title']} [{res_label}]")
             print(f"==================================================\n")
             
-            try: 
-                os.remove(tp)
-                print(f"🗑️ [BOT {bot_id}] DISK CLEARED: File deleted locally!\n")
-            except Exception: pass
+            try: os.remove(tp)
+            except: pass
             return True
         else:
-            print(f"❌ [BOT {bot_id}] Upload Failed!")
             try: os.remove(tp)
             except: pass
             return False
-    except Exception as e:
-        print(f"❌ [BOT {bot_id}] Upload Error: {e}")
+    except:
         try: os.remove(tp)
         except: pass
         return False
 
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
-    print(f"📥 [BOT {bot_id}] Downloading {res_label} Directly (8 Connections) -> {url}")
+    print(f"📥 [BOT {bot_id}] Downloading {res_label} (8 Connections) -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "8", "-s", "8", "-j", "8",
@@ -190,7 +176,7 @@ def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
     return None
 
 def run_bot():
-    print(f"🔥 Starting Dedicated-Crawler Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
+    print(f"🔥 Starting Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
         
     if BOT_ID == 8:
         print(f"🤖 [BOT 8] Live Worker is on Standby...")
@@ -206,13 +192,13 @@ def run_bot():
         movie_links = get_category_year_movies(BOT_ID)
         
     random.shuffle(movie_links)
-    print(f"🎯 [BOT {BOT_ID}] Total targeted movies to process: {len(movie_links)}")
+    print(f"🎯 [BOT {BOT_ID}] Total targeted movies: {len(movie_links)}")
 
     for m_url in movie_links:
         if completed >= MAX_MOVIES_PER_RUN or (time.time() - start_time) > 20000: break 
 
         print(f"\n--------------------------------------------------")
-        print(f"🛠️ [BOT {BOT_ID}] Step 1: Processing URL -> {m_url}")
+        print(f"🛠️ [BOT {BOT_ID}] Processing Movie URL -> {m_url}")
         
         try:
             session.headers.update({"Referer": BASE_DOMAIN})
@@ -224,7 +210,7 @@ def run_bot():
         clean_name = clean_title_for_tmdb(raw_title)
         
         if not clean_name: continue
-        print(f"🔎 [BOT {BOT_ID}] Step 2: Querying TMDB for metadata: '{clean_name}'")
+        print(f"🔎 [BOT {BOT_ID}] TMDB Search: '{clean_name}'")
 
         url_tmdb = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_name)}&language=en-US"
         try:
@@ -241,11 +227,12 @@ def run_bot():
             if res_check.status_code == 200 and res_check.json():
                 data = res_check.json()
                 if data.get("url_480p") and data.get("url_720p"):
-                    print(f"⏩ [BOT {BOT_ID}] Already fully processed in Firebase! Skipping...")
+                    print(f"⏩ [BOT {BOT_ID}] Already fully in Firebase! Skipping...")
                     continue
         except: pass
 
-        print(f"✅ [BOT {BOT_ID}] Step 3: Extracting Direct Download Links...")
+        # 💡 MOVIE PAGE SE DIRECT 3 RESOLUTION LINKS UTHANA
+        print(f"✅ [BOT {BOT_ID}] Extracting Resolution Download Links...")
         res_links = {}
         m_hrefs = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL)
         for href, text in m_hrefs:
@@ -256,7 +243,7 @@ def run_bot():
                 elif "480p" in t_low: res_links["480p"] = urllib.parse.urljoin(BASE_DOMAIN, href)
 
         if not res_links: 
-            print(f"⚠️ [BOT {BOT_ID}] No direct download links found.")
+            print(f"⚠️ [BOT {BOT_ID}] No direct download links found on page.")
             continue
 
         wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
@@ -273,8 +260,9 @@ def run_bot():
             "hindi_dubbed": True, "category": "Trending Movies"
         }
 
+        # 💡 DIRECT DOWNLOAD & UPLOAD
         for res_label, direct_download_url in res_links.items():
-            print(f"\n⚙️ [BOT {BOT_ID}] Step 4: Direct Downloading {res_label}...")
+            print(f"\n⚙️ [BOT {BOT_ID}] Downloading {res_label} directly...")
             try:
                 f_path = download_with_aria2(direct_download_url, wd, m_url, BOT_ID, res_label)
                 if f_path: 
@@ -285,7 +273,7 @@ def run_bot():
 
         completed += 1
         shutil.rmtree(wd, ignore_errors=True)
-        print(f"✅ [BOT {BOT_ID}] Movie Done! Moving to next...\n")
+        print(f"✅ [BOT {BOT_ID}] Movie Done!\n")
 
 if __name__ == "__main__":
     run_bot()
