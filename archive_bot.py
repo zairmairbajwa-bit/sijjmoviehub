@@ -34,7 +34,6 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
-# 💡 NAYA HELPER: Database se poori detail uthane ke liye
 def get_firebase_movie_data(tmdb_id):
     try:
         res = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=10)
@@ -53,6 +52,7 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
+# 💡 FIXED DEEP SPIDER CRAWLER (Sub-folders mein ghusne ke liye)
 def crawl_filmyzilla_deep_categories(bot_id):
     print(f"🕸️ [BOT {bot_id}] Initiating DEEP SPIDER CRAWL on FilmyZilla Categories & Years...")
     
@@ -64,6 +64,7 @@ def crawl_filmyzilla_deep_categories(bot_id):
         
     category_urls = []
     
+    # 1. Main Categories Jama Karna
     matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', r.text, re.IGNORECASE)
     for match in matches:
         href = match.group(1)
@@ -76,18 +77,21 @@ def crawl_filmyzilla_deep_categories(bot_id):
                     category_urls.append(full_url)
                     
     category_urls = sorted(list(set(category_urls)))
-    my_categories = category_urls[(bot_id - 1) :: (TOTAL_BOTS - 1)]
+    
+    # 💡 STRICT BOT DIVISION (Yeh log aapne screen mein bhi dekhi hogi)
+    my_categories = category_urls[(bot_id - 1) :: TOTAL_BOTS]
     print(f"📁 [BOT {bot_id}] Assigned {len(my_categories)} Main Category Folders to deeply scan.")
     
     all_movie_links = set()
     visited_pages = set()
     
+    # 2. Categories ke andar ghus kar movies nikalna
     for cat_url in my_categories:
         print(f"🕷️ [BOT {bot_id}] Crawling inside Category: {cat_url}")
         to_visit = [cat_url]
         pages_crawled = 0
         
-        while to_visit and pages_crawled < 15: 
+        while to_visit and pages_crawled < 25: # Ab zyada gehrai tak jayega!
             current_url = to_visit.pop(0)
             if current_url in visited_pages: continue
             visited_pages.add(current_url)
@@ -102,11 +106,14 @@ def crawl_filmyzilla_deep_categories(bot_id):
                     stext = match.group(2).lower()
                     sfull = urllib.parse.urljoin(BASE_DOMAIN, shref)
                     
-                    if "/movie/" in sfull and sfull.endswith(".html"):
+                    # Agar link movie ka hai
+                    if ("/movie/" in sfull or "-movie" in sfull) and sfull.endswith(".html") and "/category/" not in sfull:
                         all_movie_links.add(sfull) 
+                    # Agar link kisi aur folder (category) ya next page ka hai, toh usay aagay scan karne ke liye add karo
                     elif sfull.startswith(BASE_DOMAIN) and sfull not in visited_pages:
-                        if "page" in sfull.lower() or sfull.startswith(cat_url) or re.search(r'\b(20\d\d|19\d\d)\b', stext):
-                            to_visit.append(sfull)
+                        if "/category/" in sfull or "page" in sfull.lower() or re.search(r'\b(20\d\d|19\d\d)\b', stext):
+                            if sfull not in to_visit:
+                                to_visit.append(sfull)
             except: pass
             
     sorted_movies = sorted(list(all_movie_links))
@@ -124,7 +131,7 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
     
     if f_path != tp: shutil.move(f_path, tp)
         
-    print(f"🚀 [BOT {bot_id}] Uploading {res_label} to Archive.org (Size: {os.path.getsize(tp)/(1024*1024):.1f} MB)...")
+    print(f"🚀 [BOT {bot_id}] Uploading {res_label} to Archive.org...")
     time.sleep(1)
     
     try:
@@ -139,9 +146,7 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
             meta[f"url_{res_label}"] = archive_link
             meta["stream_url"] = archive_link 
             
-            # Har dafa existing data update karenge taake purane links delete na hon
             requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps({f"url_{res_label}": archive_link, "stream_url": archive_link}), timeout=15)
-            # Baqi metadata bhi update kardo
             requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
             
             print(f"\n🎉 ==================================================")
@@ -152,8 +157,8 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
             
             try: 
                 os.remove(tp)
-                print(f"🗑️ [BOT {bot_id}] DISK CLEARED: {res_label} file deleted locally to save space!\n")
-            except Exception as e: print(f"⚠️ Could not delete: {e}")
+                print(f"🗑️ [BOT {bot_id}] DISK CLEARED: File deleted locally!\n")
+            except Exception as e: pass
             return True
         else:
             print(f"❌ [BOT {bot_id}] Upload Failed!")
@@ -167,7 +172,7 @@ def upload_and_sync(meta, tmdb_id, release_year, ident, res_label, f_path, bot_i
         return False
 
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
-    print(f"📥 [BOT {bot_id}] Downloading {res_label} (8 Connections - Sweet Spot) -> {url}")
+    print(f"📥 [BOT {bot_id}] Downloading {res_label} (8 Connections) -> {url}")
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "8", "-s", "8", "-j", "8",
@@ -203,7 +208,7 @@ def run_bot():
         if completed >= MAX_MOVIES_PER_RUN or (time.time() - start_time) > 20000: break 
 
         print(f"\n--------------------------------------------------")
-        print(f"🛠️ [BOT {BOT_ID}] Step 1: Processing Deep FilmyZilla Link -> {m_url}")
+        print(f"🛠️ [BOT {BOT_ID}] Step 1: Processing Link -> {m_url}")
         
         try:
             session.headers.update({"Referer": BASE_DOMAIN})
@@ -221,25 +226,19 @@ def run_bot():
         try:
             t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
             valid = [r for r in t_res if r.get("media_type") in ["movie", "tv"]]
-            if not valid: 
-                print(f"⚠️ [BOT {BOT_ID}] TMDB metadata not found. Skipping to keep app clean.")
-                continue
+            if not valid: continue
             tmdb_data = valid[0]
         except: continue
             
         tmdb_id = str(tmdb_data["id"])
         
-        # 💡 STRICT DUPLICATE CHECK: Database se movie check kar raha hai
         existing_db_movie = get_firebase_movie_data(tmdb_id)
         if existing_db_movie:
-            # Agar teeno (1080p, 720p, 480p) pare hain toh poori movie chhor do
             if existing_db_movie.get("url_480p") and existing_db_movie.get("url_720p") and existing_db_movie.get("url_1080p"):
-                print(f"⏩ [BOT {BOT_ID}] All resolutions already exist in Firebase! Skipping totally...")
+                print(f"⏩ [BOT {BOT_ID}] All resolutions exist in Firebase! Skipping...")
                 continue
-            else:
-                print(f"⚠️ [BOT {BOT_ID}] Movie partially exists in Database. Will only download missing resolutions!")
 
-        print(f"✅ [BOT {BOT_ID}] Step 3: Extracting Resolution Servers from Page...")
+        print(f"✅ [BOT {BOT_ID}] Step 3: Extracting Resolution Servers...")
         res_links = {}
         m_hrefs = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL)
         for href, text in m_hrefs:
@@ -248,9 +247,7 @@ def run_bot():
             elif "1080p" in t_low: res_links["1080p"] = urllib.parse.urljoin(BASE_DOMAIN, href)
             elif "480p" in t_low: res_links["480p"] = urllib.parse.urljoin(BASE_DOMAIN, href)
 
-        if not res_links: 
-            print(f"⚠️ [BOT {BOT_ID}] No direct download links on page.")
-            continue
+        if not res_links: continue
 
         wd = f"/tmp/filmy_{BOT_ID}_{tmdb_id}"
         os.makedirs(wd, exist_ok=True)
@@ -259,7 +256,6 @@ def run_bot():
         release_year = str(tmdb_data.get('release_date') or tmdb_data.get('first_air_date', '2026'))[:4]
         ident = f"sijjhub-media-{tmdb_id}-{int(time.time())}"
         
-        # Original meta jisko update karna hai
         meta = {
             "tmdb_id": tmdb_id, "id": tmdb_id, "title": t_name, 
             "overview": tmdb_data.get("overview", ""), "release_date": release_year, 
@@ -267,12 +263,10 @@ def run_bot():
             "hindi_dubbed": True, "category": "Trending Movies"
         }
 
-        # SEQUENTIAL: Download -> Upload -> Delete (480p, 720p, 1080p)
         for res_label, resolution_page_url in res_links.items():
             
-            # 💡 RESOLUTION-LEVEL STRICT CHECK (Ye step skip karega agar ye makhsoos resolution pehle se hui toh)
             if existing_db_movie and existing_db_movie.get(f"url_{res_label}"):
-                print(f"⏩ [BOT {BOT_ID}] SKIPPING {res_label}: This resolution is already in Firebase!")
+                print(f"⏩ [BOT {BOT_ID}] SKIPPING {res_label}: Already in Firebase!")
                 continue
                 
             print(f"\n⚙️ [BOT {BOT_ID}] Step 4: Resolving {res_label} Server Link...")
@@ -308,7 +302,7 @@ def run_bot():
 
         completed += 1
         shutil.rmtree(wd, ignore_errors=True)
-        print(f"✅ [BOT {BOT_ID}] BOOM! Movie Done! Moving to next movie from directory...\n")
+        print(f"✅ [BOT {BOT_ID}] Movie Done! Moving to next...\n")
 
 if __name__ == "__main__":
     run_bot()
