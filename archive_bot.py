@@ -44,27 +44,34 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-# 💡 BOT 1: Sirf Front Page (Latest Updates) uthayega
+# 💡 BOT 1: Front Page (Latest Updates / Trending)
 def get_front_page_movies():
     movie_links = set()
-    print(f"🔥 [BOT 1] Assigned Task: Scraping FRONT PAGE (Trending / Latest Updates)!")
+    print(f"🔥 [BOT 1] Scraping FRONT PAGE (Trending / Latest Updates)...")
+    
+    # Homepage aur aglay pages se movies uthana
     for page in range(1, 4):
         url = BASE_DOMAIN if page == 1 else f"{BASE_DOMAIN}/page/{page}/"
         try:
             resp = session.get(url, timeout=15)
             if resp.status_code == 200:
-                matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE)
+                # Website ke saare .html links jo movie pages ho sakte hain
+                matches = re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL)
                 for match in matches:
                     href = match.group(1)
                     full_url = urllib.parse.urljoin(BASE_DOMAIN, href)
-                    if "/movie/" in full_url.lower() or ("-" in full_url and "page" not in full_url and "category" not in full_url):
+                    if "/movie/" in full_url.lower() or ("-" in full_url and "page" not in full_url and "category" not in full_url and "index" not in full_url):
                         movie_links.add(full_url)
-        except: pass
-    return list(movie_links)
+        except Exception as e:
+            print(f"⚠️ Front page error: {e}")
+            
+    links = list(movie_links)
+    print(f"🎯 [BOT 1] Found {len(links)} movies from Front Page.")
+    return links
 
-# 💡 BOTS 2-7: Categories -> Year Folders -> Movies Crawler
+# 💡 BOTS 2-7: Categories & Year Folders Crawler
 def get_category_year_movies(bot_id):
-    print(f"📁 [BOT {bot_id}] Assigned Task: Crawling Category & Year Folders (Avoiding Front Page)!")
+    print(f"📁 [BOT {bot_id}] Crawling Category & Year Folders...")
     try:
         r = session.get(BASE_DOMAIN, timeout=15)
     except: return []
@@ -79,8 +86,6 @@ def get_category_year_movies(bot_id):
                 category_urls.append(full_url)
                 
     category_urls = sorted(list(set(category_urls)))
-    
-    # Baqi bots mein categories baant do (Bot 2 se 7 tak)
     my_categories = category_urls[(bot_id - 2) :: 6] if len(category_urls) >= 6 else category_urls
     
     all_movie_links = set()
@@ -106,11 +111,8 @@ def get_category_year_movies(bot_id):
                     sfull = urllib.parse.urljoin(BASE_DOMAIN, shref)
                     if not sfull.startswith(BASE_DOMAIN): continue
                     
-                    # Agar movie ka page hai
-                    if "/movie/" in sfull.lower() or (sfull.endswith(".html") and "category" not in sfull.lower()):
-                        # 2026 ya latest saal wali skip karne ke liye URL check (agar zaroorat ho)
+                    if "/movie/" in sfull.lower() or (sfull.endswith(".html") and "category" not in sfull.lower() and "index" not in sfull.lower()):
                         all_movie_links.add(sfull)
-                    # Agar year folder ya sub-category hai toh uske andar jao
                     elif "category" in sfull.lower() or "default" in sfull.lower() or re.search(r'\b(20\d\d|19\d\d)\b', sfull):
                         if sfull not in visited_pages and sfull not in to_visit:
                             to_visit.append(sfull)
@@ -190,7 +192,6 @@ def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
 def run_bot():
     print(f"🔥 Starting Dedicated-Crawler Bot ID: {BOT_ID} (Account #{actual_bot_account_id})")
         
-    # Bot 8 ko standby rakha hai
     if BOT_ID == 8:
         print(f"🤖 [BOT 8] Live Worker is on Standby...")
         time.sleep(10)
@@ -199,7 +200,6 @@ def run_bot():
     completed = 0
     start_time = time.time()
     
-    # Task assignment based on BOT_ID
     if BOT_ID == 1:
         movie_links = get_front_page_movies()
     else:
@@ -236,7 +236,6 @@ def run_bot():
             
         tmdb_id = str(tmdb_data["id"])
         
-        # 💡 DUAL-CHECK FIREBASE (Anti-Collision)
         try:
             res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
             if res_check.status_code == 200 and res_check.json():
