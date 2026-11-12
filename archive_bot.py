@@ -23,7 +23,7 @@ IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
 MAX_MOVIES_PER_RUN = 30
-MAX_CONCURRENT_TASKS = 1 
+MAX_CONCURRENT_TASKS = 3
 
 session = requests.Session()
 session.headers.update({
@@ -92,7 +92,6 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
-    # Default Pages Scan (Jaise Bot 7 scan karta hai)
     for p_num in range(1, 10): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         if p_url not in visited_pages:
@@ -108,7 +107,6 @@ def get_strict_movies_for_bot():
                 if not found_any: break
             except: pass
 
-    # A-Z Pages Scan
     alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
@@ -131,11 +129,13 @@ def get_strict_movies_for_bot():
     save_bot_state(visited_pages)
     return list(movie_links)
 
+# 💡 YAHAN FIX KIYA HAI: Size Check aur Title Print
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
+    # File Size Filter (Check if file is real movie > 50MB)
     try:
         file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
-        if file_size_mb < 50: 
-            print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting!", flush=True)
+        if file_size_mb < 50: # Agar 50MB se choti hui toh fake html hai
+            print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting to prevent Spam Error!", flush=True)
             os.remove(f_path)
             return False
     except:
@@ -153,7 +153,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     
     max_retries = 5
     for attempt in range(max_retries):
-        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Attempt {attempt+1}/{max_retries})...", flush=True)
+        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Size: {file_size_mb:.2f} MB)... Attempt {attempt+1}", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -162,7 +162,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
             )
             
             if r and r[0].status_code == 200:
-                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing to DB...", flush=True)
+                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing {meta['title']} to Database...", flush=True)
                 archive_link = f"https://archive.org/download/{ident}/{file_name}"
                 db_key = f"url_{res_label}{part_suffix.replace('-', '_')}"
                 
@@ -173,23 +173,20 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
                 
                 os.remove(tp)
+                print(f"🗑️ [BOT {bot_id}] LOCAL FILE DELETED SUCCESSFULLY!\n", flush=True)
                 return True
-            else:
-                status = r[0].status_code if r else "Unknown"
-                raise Exception(f"Archive.org Rejected! Status: {status}")
-                
         except Exception as e:
-            print(f"❌ [BOT {bot_id}] Archive Error: {e}", flush=True)
+            print(f"❌ [BOT {bot_id}] Archive Error on {meta['title']}: {e}", flush=True)
             if attempt < max_retries - 1:
-                print(f"⏳ Waiting 60 Seconds Before Retry...", flush=True)
-                time.sleep(60)
+                print(f"⏳ Waiting 2 minutes before retrying...", flush=True)
+                time.sleep(120)
             else:
-                print(f"⚠️ [BOT {bot_id}] Upload failed after 5 attempts. Deleting file.", flush=True)
                 try: os.remove(tp)
                 except: pass
                 return False
     return False
 
+# 💡 YAHAN BHI TITLE PASS KIYA HAI TAQAY PATA CHALE KYA DOWNLOAD HO RAHA HAI
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label, movie_title):
     print(f"📥 [BOT {bot_id}] DOWNLOADING: {movie_title} [{res_label}]...", flush=True)
     cmd = [
@@ -225,9 +222,7 @@ def process_single_content(m_url):
     url_tmdb = f"https://api.themoviedb.org/3/search/{search_type}?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_name)}&language=en-US"
     try:
         t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
-        if not t_res: 
-            print(f"❌ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (TMDB par nahi mili)", flush=True)
-            return
+        if not t_res: return
         tmdb_data = t_res[0]
     except: return
         
@@ -237,36 +232,32 @@ def process_single_content(m_url):
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
-            if data.get("url_480p") and data.get("url_720p"): 
-                print(f"⏭️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Pehle se DB mein hai)", flush=True)
-                return 
+            if data.get("url_480p") and data.get("url_720p"): return 
     except: pass
 
     download_queue = [] 
-    for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
-        t_low = link_text.lower()
-        if "download" in t_low:
-            res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
-            if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href)))
+    
+    if is_series:
+        blocks = re.split(r'(?i)(part-\d+|episode \d+)', m_resp.text)
+        current_part = "_Part1"
+        for i, text_chunk in enumerate(blocks):
+            if re.match(r'(?i)(part-\d+|episode \d+)', text_chunk):
+                current_part = f"_{text_chunk.capitalize()}"
+            else:
+                for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', text_chunk, re.IGNORECASE | re.DOTALL):
+                    t_low = link_text.lower()
+                    if "download" in t_low:
+                        res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
+                        if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), current_part))
+    else:
+        for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
+            t_low = link_text.lower()
+            if "download" in t_low:
+                res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
+                if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), ""))
 
-    unique_urls = []
-    seen = set()
-    for res, link in download_queue:
-        if link not in seen:
-            unique_urls.append((res, link))
-            seen.add(link)
-            
-    final_download_queue = []
-    res_counters = {"480p": 1, "720p": 1, "1080p": 1}
-    
-    for res, link in unique_urls:
-        suffix = f"_Ep{res_counters[res]}" if is_series else (f"_Pt{res_counters[res]}" if res_counters[res] > 1 else "")
-        final_download_queue.append((res, link, suffix))
-        res_counters[res] += 1
-    
-    if not final_download_queue: 
-        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download link nahi mila)", flush=True)
-        return
+    download_queue = list(set(download_queue))
+    if not download_queue: return
 
     wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
     os.makedirs(wd, exist_ok=True)
@@ -283,8 +274,8 @@ def process_single_content(m_url):
         "is_series": is_series
     }
 
-    for res_label, direct_url, part_suffix in final_download_queue:
-        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title'])
+    for res_label, direct_url, part_suffix in download_queue:
+        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title']) # TITLE PASS KIYA
         if f_path: 
             upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID, part_suffix)
 
