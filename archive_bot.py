@@ -72,18 +72,28 @@ def save_bot_state(visited_pages):
         requests.put(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", json={"last_visited_pages": list(visited_pages)[-200:]}) 
     except: pass
 
+# 💡 UNIVERSAL LINK VALIDATOR (Category aur Front page dono ke links pakrega)
+def is_valid_movie_url(url):
+    low = url.lower()
+    ignored_patterns = ["/page/", "?sort=", "/category/", "wp-content", "wp-admin", "tag/", "genre/", "year/", "dmca", "contact", "privacy", "login", "signup", "sitemap"]
+    for p in ignored_patterns:
+        if p in low:
+            return False
+    return low.startswith(BASE_DOMAIN) and low != BASE_DOMAIN and low != f"{BASE_DOMAIN}/"
+
 def get_strict_movies_for_bot():
     movie_links = set()
     visited_pages = set(get_bot_state())
     
     if BOT_ID == 7: 
-        print(f"📡 [BOT 7] SCOUT: Scanning Front Page for latest releases...", flush=True)
+        print(f"📡 [BOT 7] SCOUT: Scanning Front Page...", flush=True)
         pages_to_scan = [BASE_DOMAIN, f"{BASE_DOMAIN}/page/2/", f"{BASE_DOMAIN}/page/3/", f"{BASE_DOMAIN}/page/4/"]
         for p_url in pages_to_scan:
             try:
                 resp = session.get(p_url, timeout=15)
-                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>', resp.text, re.IGNORECASE):
-                    movie_links.add(urllib.parse.urljoin(BASE_DOMAIN, match.group(1)))
+                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+                    link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
+                    if is_valid_movie_url(link): movie_links.add(link)
             except: pass
         return list(movie_links)
 
@@ -92,21 +102,25 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
-    for p_num in range(1, 10): 
+    # Default Pages Scan (Universal Matcher)
+    for p_num in range(1, 15): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         if p_url not in visited_pages:
             try:
                 resp = session.get(p_url, timeout=15)
                 if resp.status_code == 404: break 
                 found_any = False
-                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>', resp.text, re.IGNORECASE):
-                    movie_links.add(urllib.parse.urljoin(BASE_DOMAIN, match.group(1)))
-                    found_any = True
+                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+                    link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
+                    if is_valid_movie_url(link):
+                        movie_links.add(link)
+                        found_any = True
                 
                 visited_pages.add(p_url)
                 if not found_any: break
             except: pass
 
+    # A-Z Pages Scan
     alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
@@ -118,9 +132,11 @@ def get_strict_movies_for_bot():
                 if resp.status_code == 404 or "No movies found" in resp.text: break
                 
                 found_any = False
-                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>', resp.text, re.IGNORECASE):
-                    movie_links.add(urllib.parse.urljoin(BASE_DOMAIN, match.group(1)))
-                    found_any = True
+                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+                    link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
+                    if is_valid_movie_url(link):
+                        movie_links.add(link)
+                        found_any = True
                 
                 visited_pages.add(target_url)
                 if not found_any: break 
@@ -223,46 +239,49 @@ def process_single_content(m_url):
     url_tmdb = f"https://api.themoviedb.org/3/search/{search_type}?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_name)}&language=en-US"
     try:
         t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
-        if not t_res: return
+        if not t_res: 
+            print(f"❌ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (TMDB par nahi mili)", flush=True)
+            return
         tmdb_data = t_res[0]
     except: return
         
     tmdb_id = str(tmdb_data["id"])
     
-    # 💡 ADVANCE PRE-CHECK: Download shuru karne se pehle hi Firebase check karega!
+    # 💡 ADVANCE PRE-CHECK: Download se pehle Firebase check
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
-            # Agar movie pehle hi database mein mojood hai toh download bilkul mat karo!
             if data.get("url_720p") or data.get("url_1080p") or data.get("stream_url"): 
                 print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Pehle se Database mein maujood hai)", flush=True)
                 return 
     except: pass
 
     download_queue = [] 
-    
-    if is_series:
-        blocks = re.split(r'(?i)(part-\d+|episode \d+)', m_resp.text)
-        current_part = "_Part1"
-        for i, text_chunk in enumerate(blocks):
-            if re.match(r'(?i)(part-\d+|episode \d+)', text_chunk):
-                current_part = f"_{text_chunk.capitalize()}"
-            else:
-                for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', text_chunk, re.IGNORECASE | re.DOTALL):
-                    t_low = link_text.lower()
-                    if "download" in t_low:
-                        res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
-                        if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), current_part))
-    else:
-        for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
-            t_low = link_text.lower()
-            if "download" in t_low:
-                res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
-                if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), ""))
+    for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
+        t_low = link_text.lower()
+        if "download" in t_low:
+            res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
+            if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href)))
 
-    download_queue = list(set(download_queue))
-    if not download_queue: return
+    unique_urls = []
+    seen = set()
+    for res, link in download_queue:
+        if link not in seen:
+            unique_urls.append((res, link))
+            seen.add(link)
+            
+    final_download_queue = []
+    res_counters = {"480p": 1, "720p": 1, "1080p": 1}
+    
+    for res, link in unique_urls:
+        suffix = f"_Ep{res_counters[res]}" if is_series else (f"_Pt{res_counters[res]}" if res_counters[res] > 1 else "")
+        final_download_queue.append((res, link, suffix))
+        res_counters[res] += 1
+    
+    if not final_download_queue: 
+        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download link nahi mila)", flush=True)
+        return
 
     wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
     os.makedirs(wd, exist_ok=True)
@@ -279,7 +298,7 @@ def process_single_content(m_url):
         "is_series": is_series
     }
 
-    for res_label, direct_url, part_suffix in download_queue:
+    for res_label, direct_url, part_suffix in final_download_queue:
         f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title'])
         if f_path: 
             upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID, part_suffix)
