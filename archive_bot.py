@@ -32,6 +32,7 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
+# 💡 EXACT URLs FIXED - NO 'category/' MISTAKE
 BOT_TARGETS = {
     1: "imdb-top-movies",
     2: "bollywood-hindi-movies",
@@ -92,6 +93,7 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
+    # 1. Front/Default Pages Scan
     for p_num in range(1, 10): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         if p_url not in visited_pages:
@@ -107,6 +109,7 @@ def get_strict_movies_for_bot():
                 if not found_any: break
             except: pass
 
+    # 2. A-Z Strict Scan
     alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
@@ -227,6 +230,7 @@ def process_single_content(m_url):
         
     tmdb_id = str(tmdb_data["id"])
     
+    # 💡 DATABASE CHECK (Skip if already downloaded)
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
@@ -257,7 +261,7 @@ def process_single_content(m_url):
                 res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
                 if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), ""))
 
-    # === SMART DUPLICATE FILTER (Ab har quality ki sirf 1 file download hogi) ===
+    # 💡 NO DUPLICATES (Har quality ka sirf 1 link uthayega)
     unique_downloads = {}
     for res, link, part in download_queue:
         key = f"{res}_{part}"
@@ -285,7 +289,7 @@ def process_single_content(m_url):
         "is_series": is_series
     }
 
-    # Final Execution
+    # Execute
     for res_label, direct_url, part_suffix in final_download_queue:
         f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title'])
         if f_path: 
