@@ -129,12 +129,10 @@ def get_strict_movies_for_bot():
     save_bot_state(visited_pages)
     return list(movie_links)
 
-# 💡 YAHAN FIX KIYA HAI: Size Check aur Title Print
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
-    # File Size Filter (Check if file is real movie > 50MB)
     try:
         file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
-        if file_size_mb < 50: # Agar 50MB se choti hui toh fake html hai
+        if file_size_mb < 50: 
             print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting to prevent Spam Error!", flush=True)
             os.remove(f_path)
             return False
@@ -186,7 +184,6 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 return False
     return False
 
-# 💡 YAHAN BHI TITLE PASS KIYA HAI TAQAY PATA CHALE KYA DOWNLOAD HO RAHA HAI
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label, movie_title):
     print(f"📥 [BOT {bot_id}] DOWNLOADING: {movie_title} [{res_label}]...", flush=True)
     cmd = [
@@ -222,7 +219,9 @@ def process_single_content(m_url):
     url_tmdb = f"https://api.themoviedb.org/3/search/{search_type}?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_name)}&language=en-US"
     try:
         t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
-        if not t_res: return
+        if not t_res: 
+            print(f"❌ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (TMDB par nahi mili)", flush=True)
+            return
         tmdb_data = t_res[0]
     except: return
         
@@ -232,7 +231,9 @@ def process_single_content(m_url):
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
-            if data.get("url_480p") and data.get("url_720p"): return 
+            if data.get("url_480p") and data.get("url_720p"): 
+                print(f"⏭️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Pehle se Database mein maujood hai)", flush=True)
+                return 
     except: pass
 
     download_queue = [] 
@@ -256,8 +257,18 @@ def process_single_content(m_url):
                 res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
                 if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), ""))
 
-    download_queue = list(set(download_queue))
-    if not download_queue: return
+    # === SMART DUPLICATE FILTER (Ab har quality ki sirf 1 file download hogi) ===
+    unique_downloads = {}
+    for res, link, part in download_queue:
+        key = f"{res}_{part}"
+        if key not in unique_downloads:
+            unique_downloads[key] = (res, link, part)
+            
+    final_download_queue = list(unique_downloads.values())
+    
+    if not final_download_queue: 
+        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Page par Download link nahi mila)", flush=True)
+        return
 
     wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
     os.makedirs(wd, exist_ok=True)
@@ -274,8 +285,9 @@ def process_single_content(m_url):
         "is_series": is_series
     }
 
-    for res_label, direct_url, part_suffix in download_queue:
-        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title']) # TITLE PASS KIYA
+    # Final Execution
+    for res_label, direct_url, part_suffix in final_download_queue:
+        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title'])
         if f_path: 
             upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID, part_suffix)
 
