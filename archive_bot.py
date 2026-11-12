@@ -32,7 +32,6 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 BOT DUTY ASSIGNMENTS (Final Locked Targets)
 BOT_TARGETS = {
     1: "imdb-top-movies",
     2: "bollywood-hindi-movies",
@@ -60,7 +59,6 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'(?i)s\d{2}', '', clean) 
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-# 💡 SMART MEMORY (Bot bhoolay ga nahi ke kahan ruka tha)
 def get_bot_state():
     try:
         res = requests.get(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", timeout=5)
@@ -71,10 +69,9 @@ def get_bot_state():
 
 def save_bot_state(visited_pages):
     try:
-        requests.put(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", json={"last_visited_pages": list(visited_pages)[-200:]}) # Memory thori barha di
+        requests.put(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", json={"last_visited_pages": list(visited_pages)[-200:]}) 
     except: pass
 
-# 💡 STRICT NAVIGATION LOGIC (Default -> A -> B -> ... -> Z)
 def get_strict_movies_for_bot():
     movie_links = set()
     visited_pages = set(get_bot_state())
@@ -91,17 +88,16 @@ def get_strict_movies_for_bot():
         return list(movie_links)
 
     category_slug = BOT_TARGETS.get(BOT_ID)
-    base_cat_url = f"{BASE_DOMAIN}/category/{category_slug}/"
+    base_cat_url = f"{BASE_DOMAIN}/{category_slug}/"
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
-    # STEP 1: Pehle Default Page ke saare pages clear karega
     for p_num in range(1, 10): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         if p_url not in visited_pages:
             try:
                 resp = session.get(p_url, timeout=15)
-                if resp.status_code == 404: break # Agar pages khatam ho jayen
+                if resp.status_code == 404: break 
                 found_any = False
                 for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+\.html)["\'][^>]*>', resp.text, re.IGNORECASE):
                     movie_links.add(urllib.parse.urljoin(BASE_DOMAIN, match.group(1)))
@@ -111,17 +107,12 @@ def get_strict_movies_for_bot():
                 if not found_any: break
             except: pass
 
-    # STEP 2: Phir strictly A se le kar Z tak bari bari jayega
-    alphabets = [chr(i) for i in range(65, 91)] # A to Z
+    alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
-        
-        # Har alphabet ke andar ke saare pages (maslan A ke 10 pages)
-        for page_num in range(1, 20):
+        for page_num in range(1, 21):
             target_url = az_url if page_num == 1 else f"{az_url}&page={page_num}"
-            if target_url in visited_pages: 
-                continue # Agar yeh page pehle ho chuka hai toh time zaya nahi karega, foran next par jayega
-            
+            if target_url in visited_pages: continue 
             try:
                 resp = session.get(target_url, timeout=15)
                 if resp.status_code == 404 or "No movies found" in resp.text: break
@@ -132,13 +123,24 @@ def get_strict_movies_for_bot():
                     found_any = True
                 
                 visited_pages.add(target_url)
-                if not found_any: break # Agar is alphabet ka aakhri page khali hai toh agle alphabet par jump karega
+                if not found_any: break 
             except: pass
 
     save_bot_state(visited_pages)
     return list(movie_links)
 
+# 💡 YAHAN FIX KIYA HAI: Size Check aur Title Print
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
+    # File Size Filter (Check if file is real movie > 50MB)
+    try:
+        file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
+        if file_size_mb < 50: # Agar 50MB se choti hui toh fake html hai
+            print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting to prevent Spam Error!", flush=True)
+            os.remove(f_path)
+            return False
+    except:
+        return False
+
     ext = os.path.splitext(f_path)[1].lower()
     if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
     
@@ -151,7 +153,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     
     max_retries = 5
     for attempt in range(max_retries):
-        print(f"🚀 [BOT {bot_id}] ARCHIVE UPLOAD ATTEMPT {attempt+1}/{max_retries} FOR {res_label} {part_suffix}...", flush=True)
+        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Size: {file_size_mb:.2f} MB)... Attempt {attempt+1}", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -160,7 +162,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
             )
             
             if r and r[0].status_code == 200:
-                print(f"✅ [BOT {bot_id}] {res_label} {part_suffix} UPLOAD SUCCESS! Syncing Database...", flush=True)
+                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing {meta['title']} to Database...", flush=True)
                 archive_link = f"https://archive.org/download/{ident}/{file_name}"
                 db_key = f"url_{res_label}{part_suffix.replace('-', '_')}"
                 
@@ -171,10 +173,10 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
                 
                 os.remove(tp)
-                print(f"🗑️ [BOT {bot_id}] LOCAL FILE DELETED SUCCESSFULLY! ({res_label} {part_suffix})\n", flush=True)
+                print(f"🗑️ [BOT {bot_id}] LOCAL FILE DELETED SUCCESSFULLY!\n", flush=True)
                 return True
         except Exception as e:
-            print(f"❌ [BOT {bot_id}] Archive Error on {res_label} {part_suffix}: {e}", flush=True)
+            print(f"❌ [BOT {bot_id}] Archive Error on {meta['title']}: {e}", flush=True)
             if attempt < max_retries - 1:
                 print(f"⏳ Waiting 2 minutes before retrying...", flush=True)
                 time.sleep(120)
@@ -184,8 +186,9 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 return False
     return False
 
-def download_with_aria2(url, work_dir, referer_url, bot_id, res_label):
-    print(f"📥 [BOT {bot_id}] DOWNLOADING {res_label} (Direct Link)...", flush=True)
+# 💡 YAHAN BHI TITLE PASS KIYA HAI TAQAY PATA CHALE KYA DOWNLOAD HO RAHA HAI
+def download_with_aria2(url, work_dir, referer_url, bot_id, res_label, movie_title):
+    print(f"📥 [BOT {bot_id}] DOWNLOADING: {movie_title} [{res_label}]...", flush=True)
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", 
@@ -225,7 +228,6 @@ def process_single_content(m_url):
         
     tmdb_id = str(tmdb_data["id"])
     
-    # Checking if already uploaded in DB
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
@@ -235,7 +237,6 @@ def process_single_content(m_url):
 
     download_queue = [] 
     
-    # 💡 DIRECT LINK EXTRACTION (Original Fast Logic restored)
     if is_series:
         blocks = re.split(r'(?i)(part-\d+|episode \d+)', m_resp.text)
         current_part = "_Part1"
@@ -273,9 +274,8 @@ def process_single_content(m_url):
         "is_series": is_series
     }
 
-    # Execute Download and Upload
     for res_label, direct_url, part_suffix in download_queue:
-        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label)
+        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title']) # TITLE PASS KIYA
         if f_path: 
             upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID, part_suffix)
 
@@ -285,7 +285,6 @@ def run_bot():
     print(f"🔥 Starting Bot ID: {BOT_ID} (Duty: {BOT_TARGETS.get(BOT_ID)}) - Account #{actual_bot_account_id}", flush=True)
 
     if BOT_ID == 8:
-        print(f"🤖 [BOT 8] SUPERVISOR: Checking for pending user requests...", flush=True)
         try:
             req_res = requests.get(f"{FIREBASE_URL}/requests.json", timeout=10)
             if req_res.status_code == 200 and req_res.json():
@@ -295,9 +294,8 @@ def run_bot():
                         requests.patch(f"{FIREBASE_URL}/requests/{req_id}.json", json={"status": "processing"})
         except: pass
 
-    # Get strict sorted links (Default -> A -> B)
     movie_links = get_strict_movies_for_bot()
-    print(f"🎯 [BOT {BOT_ID}] Found {len(movie_links)} targets on current strict path. Initiating Downloads...", flush=True)
+    print(f"🎯 [BOT {BOT_ID}] Found {len(movie_links)} targets. Initiating Downloads...", flush=True)
 
     start_time = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
