@@ -23,7 +23,7 @@ IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
 MAX_MOVIES_PER_RUN = 30
-MAX_CONCURRENT_TASKS = 3
+MAX_CONCURRENT_TASKS = 1 
 
 session = requests.Session()
 session.headers.update({
@@ -129,13 +129,11 @@ def get_strict_movies_for_bot():
     save_bot_state(visited_pages)
     return list(movie_links)
 
-# 💡 YAHAN FIX KIYA HAI: Size Check aur Title Print
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
-    # File Size Filter (Check if file is real movie > 50MB)
     try:
         file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
-        if file_size_mb < 50: # Agar 50MB se choti hui toh fake html hai
-            print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting to prevent Spam Error!", flush=True)
+        if file_size_mb < 50: 
+            print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting!", flush=True)
             os.remove(f_path)
             return False
     except:
@@ -153,7 +151,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     
     max_retries = 5
     for attempt in range(max_retries):
-        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Size: {file_size_mb:.2f} MB)... Attempt {attempt+1}", flush=True)
+        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Attempt {attempt+1}/{max_retries})...", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -162,7 +160,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
             )
             
             if r and r[0].status_code == 200:
-                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing {meta['title']} to Database...", flush=True)
+                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing to DB...", flush=True)
                 archive_link = f"https://archive.org/download/{ident}/{file_name}"
                 db_key = f"url_{res_label}{part_suffix.replace('-', '_')}"
                 
@@ -173,20 +171,23 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
                 
                 os.remove(tp)
-                print(f"🗑️ [BOT {bot_id}] LOCAL FILE DELETED SUCCESSFULLY!\n", flush=True)
                 return True
-        except Exception as e:
-            print(f"❌ [BOT {bot_id}] Archive Error on {meta['title']}: {e}", flush=True)
-            if attempt < max_retries - 1:
-                print(f"⏳ Waiting 2 minutes before retrying...", flush=True)
-                time.sleep(120)
             else:
+                status = r[0].status_code if r else "Unknown"
+                raise Exception(f"Archive.org Rejected! Status: {status}")
+                
+        except Exception as e:
+            print(f"❌ [BOT {bot_id}] Archive Error: {e}", flush=True)
+            if attempt < max_retries - 1:
+                print(f"⏳ Waiting 60 Seconds Before Retry...", flush=True)
+                time.sleep(60)
+            else:
+                print(f"⚠️ [BOT {bot_id}] Upload failed after 5 attempts. Deleting file.", flush=True)
                 try: os.remove(tp)
                 except: pass
                 return False
     return False
 
-# 💡 YAHAN BHI TITLE PASS KIYA HAI TAQAY PATA CHALE KYA DOWNLOAD HO RAHA HAI
 def download_with_aria2(url, work_dir, referer_url, bot_id, res_label, movie_title):
     print(f"📥 [BOT {bot_id}] DOWNLOADING: {movie_title} [{res_label}]...", flush=True)
     cmd = [
@@ -228,11 +229,15 @@ def process_single_content(m_url):
         
     tmdb_id = str(tmdb_data["id"])
     
+    # 💡 ADVANCE PRE-CHECK: Download shuru karne se pehle hi Firebase check karega!
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
-            if data.get("url_480p") and data.get("url_720p"): return 
+            # Agar movie pehle hi database mein mojood hai toh download bilkul mat karo!
+            if data.get("url_720p") or data.get("url_1080p") or data.get("stream_url"): 
+                print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Pehle se Database mein maujood hai)", flush=True)
+                return 
     except: pass
 
     download_queue = [] 
@@ -275,7 +280,7 @@ def process_single_content(m_url):
     }
 
     for res_label, direct_url, part_suffix in download_queue:
-        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title']) # TITLE PASS KIYA
+        f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title'])
         if f_path: 
             upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID, part_suffix)
 
