@@ -32,7 +32,7 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 EXACT URLs FIXED - NO 'category/' MISTAKE
+# 💡 EXACT URLs - NO /category/ MISTAKE
 BOT_TARGETS = {
     1: "imdb-top-movies",
     2: "bollywood-hindi-movies",
@@ -93,7 +93,6 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
-    # 1. Front/Default Pages Scan
     for p_num in range(1, 10): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         if p_url not in visited_pages:
@@ -109,7 +108,6 @@ def get_strict_movies_for_bot():
                 if not found_any: break
             except: pass
 
-    # 2. A-Z Strict Scan
     alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
@@ -136,7 +134,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     try:
         file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
         if file_size_mb < 50: 
-            print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting to prevent Spam Error!", flush=True)
+            print(f"⚠️ [BOT {bot_id}] FAKE FILE DETECTED! '{meta['title']}' is only {file_size_mb:.2f}MB. Deleting!", flush=True)
             os.remove(f_path)
             return False
     except:
@@ -154,7 +152,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     
     max_retries = 5
     for attempt in range(max_retries):
-        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Size: {file_size_mb:.2f} MB)... Attempt {attempt+1}", flush=True)
+        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Size: {file_size_mb:.2f} MB)...", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -163,7 +161,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
             )
             
             if r and r[0].status_code == 200:
-                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing {meta['title']} to Database...", flush=True)
+                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing to DB...", flush=True)
                 archive_link = f"https://archive.org/download/{ident}/{file_name}"
                 db_key = f"url_{res_label}{part_suffix.replace('-', '_')}"
                 
@@ -174,13 +172,11 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
                 
                 os.remove(tp)
-                print(f"🗑️ [BOT {bot_id}] LOCAL FILE DELETED SUCCESSFULLY!\n", flush=True)
                 return True
         except Exception as e:
-            print(f"❌ [BOT {bot_id}] Archive Error on {meta['title']}: {e}", flush=True)
+            print(f"❌ [BOT {bot_id}] Archive Error: {e}", flush=True)
             if attempt < max_retries - 1:
-                print(f"⏳ Waiting 2 minutes before retrying...", flush=True)
-                time.sleep(120)
+                time.sleep(60)
             else:
                 try: os.remove(tp)
                 except: pass
@@ -230,7 +226,6 @@ def process_single_content(m_url):
         
     tmdb_id = str(tmdb_data["id"])
     
-    # 💡 DATABASE CHECK (Skip if already downloaded)
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
@@ -240,35 +235,29 @@ def process_single_content(m_url):
                 return 
     except: pass
 
+    # 💡 EPISODES FIX (Ab har episode alag number ke sath save hogi)
     download_queue = [] 
-    
-    if is_series:
-        blocks = re.split(r'(?i)(part-\d+|episode \d+)', m_resp.text)
-        current_part = "_Part1"
-        for i, text_chunk in enumerate(blocks):
-            if re.match(r'(?i)(part-\d+|episode \d+)', text_chunk):
-                current_part = f"_{text_chunk.capitalize()}"
-            else:
-                for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', text_chunk, re.IGNORECASE | re.DOTALL):
-                    t_low = link_text.lower()
-                    if "download" in t_low:
-                        res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
-                        if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), current_part))
-    else:
-        for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
-            t_low = link_text.lower()
-            if "download" in t_low:
-                res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
-                if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href), ""))
+    for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
+        t_low = link_text.lower()
+        if "download" in t_low:
+            res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
+            if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href)))
 
-    # 💡 NO DUPLICATES (Har quality ka sirf 1 link uthayega)
-    unique_downloads = {}
-    for res, link, part in download_queue:
-        key = f"{res}_{part}"
-        if key not in unique_downloads:
-            unique_downloads[key] = (res, link, part)
+    # Remove identical duplicate URLs but KEEP episodes
+    unique_urls = []
+    seen = set()
+    for res, link in download_queue:
+        if link not in seen:
+            unique_urls.append((res, link))
+            seen.add(link)
             
-    final_download_queue = list(unique_downloads.values())
+    final_download_queue = []
+    res_counters = {"480p": 1, "720p": 1, "1080p": 1}
+    
+    for res, link in unique_urls:
+        suffix = f"_Ep{res_counters[res]}" if is_series else (f"_Pt{res_counters[res]}" if res_counters[res] > 1 else "")
+        final_download_queue.append((res, link, suffix))
+        res_counters[res] += 1
     
     if not final_download_queue: 
         print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Page par Download link nahi mila)", flush=True)
@@ -289,7 +278,6 @@ def process_single_content(m_url):
         "is_series": is_series
     }
 
-    # Execute
     for res_label, direct_url, part_suffix in final_download_queue:
         f_path = download_with_aria2(direct_url, wd, m_url, BOT_ID, res_label, meta['title'])
         if f_path: 
