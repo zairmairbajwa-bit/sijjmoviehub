@@ -23,7 +23,9 @@ IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
 MAX_MOVIES_PER_RUN = 30
-MAX_CONCURRENT_TASKS = 3
+
+# 💡 SPAM FIX: Ab ek waqt mein sirf 1 movie process hogi taake Archive.org block na kare!
+MAX_CONCURRENT_TASKS = 1 
 
 session = requests.Session()
 session.headers.update({
@@ -32,7 +34,7 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 EXACT URLs - NO /category/ MISTAKE
+# 💡 PERFECT URLs (No category mistake)
 BOT_TARGETS = {
     1: "imdb-top-movies",
     2: "bollywood-hindi-movies",
@@ -77,6 +79,7 @@ def get_strict_movies_for_bot():
     movie_links = set()
     visited_pages = set(get_bot_state())
     
+    # 💡 .html REGEX RESTORED: Yeh 100% movies pakrega
     if BOT_ID == 7: 
         print(f"📡 [BOT 7] SCOUT: Scanning Front Page for latest releases...", flush=True)
         pages_to_scan = [BASE_DOMAIN, f"{BASE_DOMAIN}/page/2/", f"{BASE_DOMAIN}/page/3/", f"{BASE_DOMAIN}/page/4/"]
@@ -93,6 +96,7 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
+    # Default Page Scanning
     for p_num in range(1, 10): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         if p_url not in visited_pages:
@@ -108,6 +112,7 @@ def get_strict_movies_for_bot():
                 if not found_any: break
             except: pass
 
+    # A-Z Scanning
     alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
@@ -152,7 +157,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     
     max_retries = 5
     for attempt in range(max_retries):
-        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Size: {file_size_mb:.2f} MB)...", flush=True)
+        print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} {part_suffix} [{res_label}] (Attempt {attempt+1}/{max_retries})...", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -160,6 +165,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 access_key=IA_ACCESS, secret_key=IA_SECRET
             )
             
+            # 💡 RETRY FIX: Agar 200 ke ilawa koi bhi status aaya toh zabardasti fail karega aur 60 sec wait karega!
             if r and r[0].status_code == 200:
                 print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing to DB...", flush=True)
                 archive_link = f"https://archive.org/download/{ident}/{file_name}"
@@ -173,11 +179,17 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 
                 os.remove(tp)
                 return True
+            else:
+                status = r[0].status_code if r else "Unknown"
+                raise Exception(f"Archive.org Rejected! Status: {status}")
+                
         except Exception as e:
             print(f"❌ [BOT {bot_id}] Archive Error: {e}", flush=True)
             if attempt < max_retries - 1:
+                print(f"⏳ Waiting 60 Seconds Before Retry...", flush=True)
                 time.sleep(60)
             else:
+                print(f"⚠️ [BOT {bot_id}] Upload failed after 5 attempts. Deleting file.", flush=True)
                 try: os.remove(tp)
                 except: pass
                 return False
@@ -231,11 +243,11 @@ def process_single_content(m_url):
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
             if data.get("url_480p") and data.get("url_720p"): 
-                print(f"⏭️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Pehle se Database mein maujood hai)", flush=True)
+                print(f"⏭️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Pehle se DB mein hai)", flush=True)
                 return 
     except: pass
 
-    # 💡 EPISODES FIX (Ab har episode alag number ke sath save hogi)
+    # Episode Logic (Auto-Counter)
     download_queue = [] 
     for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
         t_low = link_text.lower()
@@ -243,7 +255,6 @@ def process_single_content(m_url):
             res = "720p" if "720p" in t_low else ("1080p" if "1080p" in t_low else ("480p" if "480p" in t_low else None))
             if res: download_queue.append((res, urllib.parse.urljoin(BASE_DOMAIN, href)))
 
-    # Remove identical duplicate URLs but KEEP episodes
     unique_urls = []
     seen = set()
     for res, link in download_queue:
@@ -260,7 +271,7 @@ def process_single_content(m_url):
         res_counters[res] += 1
     
     if not final_download_queue: 
-        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Page par Download link nahi mila)", flush=True)
+        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download link nahi mila)", flush=True)
         return
 
     wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
