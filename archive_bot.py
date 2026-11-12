@@ -23,8 +23,6 @@ IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
 MAX_MOVIES_PER_RUN = 30
-
-# 💡 SPAM FIX: Ab ek waqt mein sirf 1 movie process hogi taake Archive.org block na kare!
 MAX_CONCURRENT_TASKS = 1 
 
 session = requests.Session()
@@ -34,7 +32,6 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 PERFECT URLs (No category mistake)
 BOT_TARGETS = {
     1: "imdb-top-movies",
     2: "bollywood-hindi-movies",
@@ -79,7 +76,6 @@ def get_strict_movies_for_bot():
     movie_links = set()
     visited_pages = set(get_bot_state())
     
-    # 💡 .html REGEX RESTORED: Yeh 100% movies pakrega
     if BOT_ID == 7: 
         print(f"📡 [BOT 7] SCOUT: Scanning Front Page for latest releases...", flush=True)
         pages_to_scan = [BASE_DOMAIN, f"{BASE_DOMAIN}/page/2/", f"{BASE_DOMAIN}/page/3/", f"{BASE_DOMAIN}/page/4/"]
@@ -96,7 +92,7 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
-    # Default Page Scanning
+    # Default Pages Scan (Jaise Bot 7 scan karta hai)
     for p_num in range(1, 10): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         if p_url not in visited_pages:
@@ -112,7 +108,7 @@ def get_strict_movies_for_bot():
                 if not found_any: break
             except: pass
 
-    # A-Z Scanning
+    # A-Z Pages Scan
     alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
@@ -165,7 +161,6 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 access_key=IA_ACCESS, secret_key=IA_SECRET
             )
             
-            # 💡 RETRY FIX: Agar 200 ke ilawa koi bhi status aaya toh zabardasti fail karega aur 60 sec wait karega!
             if r and r[0].status_code == 200:
                 print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing to DB...", flush=True)
                 archive_link = f"https://archive.org/download/{ident}/{file_name}"
@@ -247,7 +242,6 @@ def process_single_content(m_url):
                 return 
     except: pass
 
-    # Episode Logic (Auto-Counter)
     download_queue = [] 
     for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
         t_low = link_text.lower()
