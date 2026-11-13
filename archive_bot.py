@@ -7,6 +7,7 @@ import requests
 import subprocess
 import internetarchive as ia
 import shutil
+import hashlib
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
@@ -89,10 +90,9 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     if f_path != tp: 
         shutil.move(f_path, tp)
     
-    attempt = 0
-    while True:
-        attempt += 1
-        print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}): {meta['title']} [{res_label}]...", flush=True)
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}/{max_attempts}): {meta['title']} [{res_label}]...", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -115,8 +115,13 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
                 except: pass
                 return True
         except Exception as e:
-            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 15 seconds before retry...", flush=True)
-            time.sleep(15)
+            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 45 seconds before retry...", flush=True)
+            time.sleep(45)
+
+    print(f"❌ [BOT {bot_id}] Upload failed after {max_attempts} attempts. Skipping {res_label} to prevent lockup.", flush=True)
+    try: os.remove(tp)
+    except: pass
+    return False
 
 def get_resolution_links(movie_page_url):
     try:
@@ -147,51 +152,27 @@ def get_resolution_links(movie_page_url):
     except:
         return {}
 
-# 💡 THE FIX: Smart Resolver for l.php links!
-def resolve_actual_download_link(url):
+# 💡 NAYA FIX: Python se pehle original link bypass karna
+def resolve_actual_download_link(url, referer_url):
     try:
-        print(f"🔍 [BOT {BOT_ID}] Resolving l.php link: {url}", flush=True)
-        # Follow HTTP redirects aggressively
-        resp = session.get(url, timeout=20, allow_redirects=True)
-        current_url = resp.url
-        
-        if "l.php" not in current_url and current_url != url:
-            print(f"🎯 Redirected to: {current_url[:60]}...", flush=True)
-            return current_url
-            
-        # Check for Meta Refresh Redirect in HTML
-        meta_match = re.search(r'(?i)<meta\s+http-equiv=["\']refresh["\']\s+content=["\']\d+;\s*url=([^"\']+)["\']', resp.text)
-        if meta_match:
-            new_link = urllib.parse.urljoin(current_url, meta_match.group(1))
-            print(f"🎯 Meta Refresh Found: {new_link[:60]}...", flush=True)
-            return new_link
-
-        # Check for Javascript Redirect
-        js_match = re.search(r'(?i)window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', resp.text)
-        if js_match:
-            new_link = urllib.parse.urljoin(current_url, js_match.group(1))
-            print(f"🎯 JS Redirect Found: {new_link[:60]}...", flush=True)
-            return new_link
-
-        # Look for the final external download button link
-        for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
-            href = match.group(1)
-            if href.startswith("http") and "filmy-hd.online" not in href.lower() and not any(skip in href.lower() for skip in ["whatsapp", "telegram", "facebook", "twitter"]):
-                print(f"🎯 External Button Link Found: {href[:60]}...", flush=True)
-                return href
-                
-        return current_url
+        print(f"🔍 [BOT {BOT_ID}] Extracting real direct link...", flush=True)
+        # Website ko referer de kar dhoka dena
+        session.headers.update({"Referer": referer_url})
+        resp = session.get(url, timeout=20, allow_redirects=True, stream=True)
+        final_url = resp.url
+        print(f"🎯 Real Download Link Found: {final_url[:70]}...", flush=True)
+        return final_url
     except Exception as e:
-        print(f"⚠️ Error resolving link: {e}", flush=True)
         return url
 
-def download_with_aria2(url, work_dir):
+def download_with_aria2(url, work_dir, referer_url):
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", 
         "-c", "--max-tries=3", "--retry-wait=2", "--connect-timeout=15",
         "--content-disposition-default-utf8=true",
         "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        f"--header=Referer: {referer_url}", # 💡 NAYA FIX: Aria2c ko bhi referer dena
         url
     ]
     try: 
@@ -222,7 +203,9 @@ def process_single_content(m_url):
     
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
-    unique_key = abs(hash(m_url)) % (10 ** 10)
+    
+    # 💡 Pakki ID yahan banegi taake duplicate download na ho!
+    unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json", timeout=5)
@@ -253,17 +236,20 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT SEQUENTIAL & ISOLATED RESOLUTION DOWNLOAD
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
             
         intermediate_link = resolution_links[res_label]
-        actual_download_link = resolve_actual_download_link(intermediate_link)
+        
+        # 💡 Yahan actual link resolve hoga page ka hawala de kar
+        actual_download_link = resolve_actual_download_link(intermediate_link, m_url)
         
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
-        f_path = download_with_aria2(actual_download_link, wd)
+        # 💡 Aria2c ko movie page ka address lazmi dena
+        f_path = download_with_aria2(actual_download_link, wd, m_url)
+        
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 30:
@@ -290,7 +276,6 @@ def run_bot():
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
     start_time = time.time()
     
-    # Strictly 1 by 1 page scanning without limits
     p_num = 1
     while True:
         if (time.time() - start_time) > 25000:
