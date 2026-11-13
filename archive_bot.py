@@ -22,7 +22,8 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-MAX_MOVIES_PER_RUN = 30
+# 💡 YAHAN 500 KI LIMIT LAG GAYI HAI TAQAY BOT 6 GHANTE NON-STOP CHALE
+MAX_MOVIES_PER_RUN = 500
 MAX_CONCURRENT_TASKS = 1 
 
 session = requests.Session()
@@ -47,11 +48,21 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
+# 💡 SUPER TITLE CLEANER: TMDB MISMATCH KO KHATAM KARNE KE LIYE
 def clean_title_for_tmdb(raw_title):
-    clean = re.sub(r'(?i)\bDownload\b', '', raw_title)
+    # Faltu menu tags aur catalog pages ko completely skip karega
+    if "Catalog &raquo;" in raw_title or "Latest Bollywood" in raw_title:
+        return None
+        
+    clean = raw_title
+    clean = re.sub(r'(?i)Bollywood Hindi Movie.*', '', clean)
+    clean = re.sub(r'(?i)Hollywood Hindi Movie.*', '', clean)
+    clean = re.sub(r'(?i)South Hindi Dubbed.*', '', clean)
+    clean = re.sub(r'(?i)HQCam Movie.*', '', clean)
     clean = re.sub(r'(?i)in HD Filmyzilla.*', '', clean)
     clean = re.sub(r'(?i)Filmyzilla', '', clean)
     clean = re.sub(r'(?i)Hindi Dubbed.*', '', clean)
+    clean = re.sub(r'(?i)\bDownload\b', '', clean)
     clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|1080p|720p|480p|hevc|esub|dual audio|web series).*', '', clean)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
@@ -72,10 +83,15 @@ def save_bot_state(visited_pages):
         requests.put(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", json={"last_visited_pages": list(visited_pages)[-200:]}) 
     except: pass
 
-# 💡 UNIVERSAL LINK VALIDATOR (Category aur Front page dono ke links pakrega)
 def is_valid_movie_url(url):
     low = url.lower()
-    ignored_patterns = ["/page/", "?sort=", "/category/", "wp-content", "wp-admin", "tag/", "genre/", "year/", "dmca", "contact", "privacy", "login", "signup", "sitemap"]
+    ignored_patterns = [
+        "/page/", "?sort=", "/category/", "wp-content", "wp-admin", 
+        "tag/", "genre/", "year/", "dmca", "contact", "privacy", 
+        "login", "signup", "sitemap", "bollywood-hindi-movies", 
+        "hollywood-hindi-movies", "south-hindi-dubbed-movie", "punjabi-movies", 
+        "animation-movies", "web-series", "imdb-top-movies"
+    ]
     for p in ignored_patterns:
         if p in low:
             return False
@@ -102,25 +118,32 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
-    # Default Pages Scan (Universal Matcher)
-    for p_num in range(1, 15): 
+    for p_num in range(1, 50): 
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
-        if p_url not in visited_pages:
-            try:
-                resp = session.get(p_url, timeout=15)
-                if resp.status_code == 404: break 
-                found_any = False
-                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
-                    link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
-                    if is_valid_movie_url(link):
-                        movie_links.add(link)
-                        found_any = True
+        if p_url in visited_pages: continue
+        
+        try:
+            print(f"📄 [BOT {BOT_ID}] Scanning Page {p_num}: {p_url}", flush=True)
+            resp = session.get(p_url, timeout=15)
+            if resp.status_code == 404 or "Not Found" in resp.text: 
+                print(f"🛑 [BOT {BOT_ID}] Reached end of category pages at Page {p_num}.", flush=True)
+                break 
                 
-                visited_pages.add(p_url)
-                if not found_any: break
-            except: pass
+            found_any = False
+            for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+                link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
+                if is_valid_movie_url(link):
+                    movie_links.add(link)
+                    found_any = True
+            
+            visited_pages.add(p_url)
+            if not found_any: 
+                print(f"⚠️ [BOT {BOT_ID}] No movies found on Page {p_num}. Stopping scan.", flush=True)
+                break
+        except Exception as e:
+            print(f"❌ [BOT {BOT_ID}] Error scanning page {p_num}: {e}", flush=True)
+            break
 
-    # A-Z Pages Scan
     alphabets = [chr(i) for i in range(65, 91)] 
     for letter in alphabets:
         az_url = f"{base_cat_url}?sort={letter}"
@@ -131,15 +154,12 @@ def get_strict_movies_for_bot():
                 resp = session.get(target_url, timeout=15)
                 if resp.status_code == 404 or "No movies found" in resp.text: break
                 
-                found_any = False
                 for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
                     link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
                     if is_valid_movie_url(link):
                         movie_links.add(link)
-                        found_any = True
                 
                 visited_pages.add(target_url)
-                if not found_any: break 
             except: pass
 
     save_bot_state(visited_pages)
@@ -230,8 +250,9 @@ def process_single_content(m_url):
     
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else ""
+    
     clean_name = clean_title_for_tmdb(raw_title)
-    if not clean_name: return
+    if not clean_name: return # Useless catalog pages yahan filter ho jayenge
 
     is_series = BOT_ID == 6 or "series" in raw_title.lower() or "season" in raw_title.lower()
     search_type = "tv" if is_series else "multi"
@@ -247,13 +268,12 @@ def process_single_content(m_url):
         
     tmdb_id = str(tmdb_data["id"])
     
-    # 💡 ADVANCE PRE-CHECK: Download se pehle Firebase check
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
             if data.get("url_720p") or data.get("url_1080p") or data.get("stream_url"): 
-                print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Pehle se Database mein maujood hai)", flush=True)
+                print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Pehle se DB mein maujood hai)", flush=True)
                 return 
     except: pass
 
@@ -280,7 +300,6 @@ def process_single_content(m_url):
         res_counters[res] += 1
     
     if not final_download_queue: 
-        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download link nahi mila)", flush=True)
         return
 
     wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
@@ -325,7 +344,7 @@ def run_bot():
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
         futures = []
         for m_url in movie_links[:MAX_MOVIES_PER_RUN]:
-            if (time.time() - start_time) > 20000: break 
+            if (time.time() - start_time) > 20000: break # GitHub ke 6-ghante ki limit se pehle ruk jayega
             futures.append(executor.submit(process_single_content, m_url))
         
         concurrent.futures.wait(futures)
