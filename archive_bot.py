@@ -199,7 +199,7 @@ def process_single_content(m_url):
             data = res_check.json()
             if data.get("url_480p") or data.get("url_720p") or data.get("stream_url"):
                 print(f"⏭️ [BOT {BOT_ID}] ALREADY IN DB SKIPPED: '{raw_title[:30]}'", flush=True)
-                return True # Handled/Skipped
+                return True
     except: 
         pass
 
@@ -222,10 +222,13 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT SEQUENTIAL RESOLUTION LOOP: 480p -> Upload -> Complete, then 720p -> Upload -> Complete
-    for res_label, download_link in resolution_links.items():
-        print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
+    # 💡 STRICT EXCLUSIVE LOOP: Iterates keys one by one (e.g. 480p first, fully finish upload, THEN 720p)
+    for res_label in ["480p", "720p"]:
+        if res_label not in resolution_links:
+            continue
+        download_link = resolution_links[res_label]
         
+        print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         f_path = download_with_aria2(download_link, wd)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
@@ -241,7 +244,6 @@ def process_single_content(m_url):
     shutil.rmtree(wd, ignore_errors=True)
     return True
 
-# 💡 PURE PAGE-BY-PAGE SCANNER (Scans Page 1 -> Downloads all on Page 1 -> Moves to Page 2)
 def run_bot():
     category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
     base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
@@ -250,7 +252,6 @@ def run_bot():
     total_downloaded = 0
     start_time = time.time()
     
-    # Page by page loop
     for p_num in range(1, 41):
         if total_downloaded >= MAX_MOVIES_TOTAL or (time.time() - start_time) > 25000:
             break
@@ -261,7 +262,6 @@ def run_bot():
         try:
             resp = session.get(p_url, timeout=15)
             if resp.status_code != 200:
-                print(f"🛑 [BOT {BOT_ID}] Page {p_num} returned status {resp.status_code}. Ending scan.", flush=True)
                 break
                 
             page_movie_links = []
@@ -272,12 +272,10 @@ def run_bot():
                     page_movie_links.append(link)
             
             if not page_movie_links:
-                print(f"🛑 [BOT {BOT_ID}] No movies found on Page {p_num}. Ending scan.", flush=True)
                 break
                 
             print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly one by one...", flush=True)
             
-            # Process each movie on THIS page strictly sequentially before going to next page
             for m_url in page_movie_links:
                 if total_downloaded >= MAX_MOVIES_TOTAL:
                     break
