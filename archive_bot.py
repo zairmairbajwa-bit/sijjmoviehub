@@ -47,37 +47,46 @@ def is_valid_movie_url(url):
         return True
     return False
 
+# 💡 SUPER SMART TMDB MATCHER (Movies + TV Shows + Name Cleaning)
 def fetch_tmdb_metadata(raw_title):
-    clean_query = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download|Web-DL).*', '', raw_title)
+    # Website ke kachre wale words ko saaf karna
+    clean_query = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download|Web-DL|Panjabi Movie|Punjabi Movie|South Hindi Dubbed|Web Series|Season \d+|Episode \d+).*', '', raw_title)
+    
     year_match = re.search(r'\((\d{4})\)|\[(\d{4})\]', clean_query)
     release_year = year_match.group(1) or year_match.group(2) if year_match else "2026"
     
     clean_query = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean_query)
-    clean_query = re.sub(r'\(.*?\)|\[.*?\]', '', clean_query).strip()
+    clean_query = re.sub(r'\(.*?\)|\[.*?\]', '', clean_query)
+    clean_query = clean_query.replace('-', ' ').replace('_', ' ').strip()
     
-    search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_query)}"
+    # TMDB Multi-Search (TV + Movie)
+    search_url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_query)}"
     try:
         resp = requests.get(search_url, timeout=10)
         if resp.status_code == 200:
             results = resp.json().get("results", [])
-            if results:
-                m = results[0]
-                return {
-                    "title": m.get("title", clean_query),
-                    "overview": m.get("overview", raw_title),
-                    "release_date": m.get("release_date", release_year)[:4],
-                    "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "",
-                    "tmdb_matched": True
-                }
+            for m in results:
+                # Pehla valid Movie ya TV show uthao
+                if m.get("media_type") in ["movie", "tv"]:
+                    title = m.get("title") if m.get("media_type") == "movie" else m.get("name")
+                    rel_date = m.get("release_date") if m.get("media_type") == "movie" else m.get("first_air_date")
+                    rel_year = rel_date[:4] if rel_date else release_year
+                    return {
+                        "title": title or clean_query,
+                        "overview": m.get("overview", raw_title),
+                        "release_date": rel_year,
+                        "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "",
+                        "tmdb_matched": True,
+                        "is_series": True if m.get("media_type") == "tv" else False
+                    }
     except:
         pass
         
-    fallback_title = clean_query.replace('-', ' ').replace('_', ' ').strip()
-    if not fallback_title:
-        fallback_title = "Unknown_Movie"
+    fallback_title = clean_query or "Unknown_Movie"
     return {
         "title": fallback_title, "overview": raw_title,
-        "release_date": release_year, "poster": "", "tmdb_matched": False
+        "release_date": release_year, "poster": "", "tmdb_matched": False,
+        "is_series": False
     }
 
 def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
@@ -152,11 +161,9 @@ def get_resolution_links(movie_page_url):
     except:
         return {}
 
-# 💡 NAYA FIX: Python se pehle original link bypass karna
 def resolve_actual_download_link(url, referer_url):
     try:
         print(f"🔍 [BOT {BOT_ID}] Extracting real direct link...", flush=True)
-        # Website ko referer de kar dhoka dena
         session.headers.update({"Referer": referer_url})
         resp = session.get(url, timeout=20, allow_redirects=True, stream=True)
         final_url = resp.url
@@ -172,7 +179,7 @@ def download_with_aria2(url, work_dir, referer_url):
         "-c", "--max-tries=3", "--retry-wait=2", "--connect-timeout=15",
         "--content-disposition-default-utf8=true",
         "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        f"--header=Referer: {referer_url}", # 💡 NAYA FIX: Aria2c ko bhi referer dena
+        f"--header=Referer: {referer_url}",
         url
     ]
     try: 
@@ -204,7 +211,6 @@ def process_single_content(m_url):
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
     
-    # 💡 Pakki ID yahan banegi taake duplicate download na ho!
     unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
@@ -229,11 +235,12 @@ def process_single_content(m_url):
     os.makedirs(wd, exist_ok=True)
     ident = f"sijjhub-media-{unique_key}-{int(time.time())}"
     
+    # 💡 NAYI CHEEZ: Ab bot "is_series" ka tag bhi khud pakrega TV shows ke liye
     meta = {
         "tmdb_id": str(unique_key), "id": str(unique_key), "title": tmdb_meta['title'], 
         "overview": tmdb_meta['overview'], "release_date": tmdb_meta['release_date'], 
         "poster": tmdb_meta['poster'], "hindi_dubbed": True, "category": BOT_TARGETS.get(BOT_ID, "movies"),
-        "is_series": False
+        "is_series": tmdb_meta['is_series']
     }
 
     for res_label in ["480p", "720p"]:
@@ -241,13 +248,10 @@ def process_single_content(m_url):
             continue
             
         intermediate_link = resolution_links[res_label]
-        
-        # 💡 Yahan actual link resolve hoga page ka hawala de kar
         actual_download_link = resolve_actual_download_link(intermediate_link, m_url)
         
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
-        # 💡 Aria2c ko movie page ka address lazmi dena
         f_path = download_with_aria2(actual_download_link, wd, m_url)
         
         if f_path:
