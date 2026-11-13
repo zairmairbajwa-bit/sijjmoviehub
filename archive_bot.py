@@ -155,6 +155,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     except:
         return False
 
+# 💡 PERFECT SEQUENTIAL SERVER SORTER (Server 1, 2, 3, 4 ki tarteeb)
 def get_server_links(res_page_url):
     try:
         resp = session.get(res_page_url, timeout=15)
@@ -179,15 +180,34 @@ def get_server_links(res_page_url):
                 is_server = True
                 
             if is_server:
-                servers.append(link)
+                servers.append((text, link))
         
+        # Unique servers
         unique_servers = []
         seen_links = set()
-        for l in servers:
+        for t, l in servers:
             if l not in seen_links:
-                unique_servers.append(l)
+                unique_servers.append((t, l))
                 seen_links.add(l)
-        return unique_servers
+
+        # 💡 Tarteeb dena: Server 1 pehle, phir 2, phir 3, phir 4
+        s1, s2, s3, s4, others = [], [], [], [], []
+        for t, l in unique_servers:
+            comb = t + " " + l
+            if "server 1" in comb or "server-1" in comb:
+                s1.append(l)
+            elif "server 2" in comb or "server-2" in comb:
+                s2.append(l)
+            elif "server 3" in comb or "server-3" in comb:
+                s3.append(l)
+            elif "server 4" in comb or "server-4" in comb:
+                s4.append(l)
+            else:
+                others.append(l)
+                
+        # Bilkul wahi sequence jo aap chahte hain: 1 -> 2 -> 3 -> 4
+        sorted_servers = s1 + s2 + s3 + s4 + others
+        return sorted_servers
     except:
         return []
 
@@ -219,28 +239,28 @@ def download_with_aria2(url, work_dir, referer_url):
             
     return largest_file
 
-# 💡 THE MASTER FIX: Human Simulation & HTML Sniffer
+# 💡 1 BY 1 SEQUENTIAL HIT & TRIAL (Pehle Server 1, phir 2, phir 3...)
 def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
-    for s_link in server_links:
-        print(f"🔄 [BOT {bot_id}] Trying Server: {s_link[:50]}...", flush=True) 
+    for i, s_link in enumerate(server_links):
+        server_num = i + 1
+        print(f"🔄 [BOT {bot_id}] Trying Server {server_num}: {s_link[:50]}...", flush=True) 
         
-        # STEP 1: Direct Click! (Jesay aapne manual click kiya)
+        # Direct Click!
         f_path = download_with_aria2(s_link, work_dir, referer)
         
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 50: 
-                print(f"🟢 [BOT {bot_id}] SUCCESS! Direct movie downloaded ({file_size_mb:.2f}MB).", flush=True)
-                return f_path # Kamyab! Seedha agay barho (Baqi servers skip)
+                print(f"🟢 [BOT {bot_id}] SUCCESS! Server {server_num} delivered movie ({file_size_mb:.2f}MB).", flush=True)
+                return f_path # Kamyab! Baqi servers ko haath nahi lagayega
             else:
-                print(f"⚠️ [BOT {bot_id}] Popup/HTML Redirect caught (0.01MB). Sniffing inside...", flush=True)
-                
-                # STEP 2: Agar chota page/popup aaya, toh file se asli link nikal lo
+                print(f"⚠️ [BOT {BOT_ID}] Server {server_num} gave popup/error (0.01MB). Switching to next server...", flush=True)
                 try:
                     with open(f_path, 'r', encoding='utf-8', errors='ignore') as f:
                         html_content = f.read()
-                    os.remove(f_path) # Kachra delete
+                    os.remove(f_path)
                     
+                    # Inner link sniffer
                     inner_links = []
                     matches = re.findall(r'href=["\']([^"\']+?)["\']', html_content, re.IGNORECASE)
                     for m in matches:
@@ -248,25 +268,19 @@ def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, t
                         if not any(x in m_low for x in ["whatsapp", "telegram", "facebook", "vpn", "app", "category", "javascript"]):
                             inner_links.append(urllib.parse.urljoin(s_link, m))
                             
-                    meta_match = re.search(r'url=([^"\'>]+)', html_content, re.IGNORECASE)
-                    if meta_match:
-                        inner_links.insert(0, urllib.parse.urljoin(s_link, meta_match.group(1)))
-                        
-                    # Un chhupe hue links ko download karo
-                    for inner_link in inner_links[:3]:
-                        print(f"🔎 [BOT {bot_id}] Found inner link, trying: {inner_link[:50]}...", flush=True)
+                    for inner_link in inner_links[:2]:
                         inner_f_path = download_with_aria2(inner_link, work_dir, s_link)
                         if inner_f_path:
                             inner_size_mb = os.path.getsize(inner_f_path) / (1024 * 1024)
                             if inner_size_mb > 50:
-                                print(f"🟢 [BOT {bot_id}] SUCCESS! Downloaded from inner link ({inner_size_mb:.2f}MB).", flush=True)
+                                print(f"🟢 [BOT {bot_id}] SUCCESS from inner link on Server {server_num}!", flush=True)
                                 return inner_f_path
                             else:
                                 os.remove(inner_f_path)
                 except Exception:
                     pass
-                    
-        print(f"❌ [BOT {bot_id}] Server failed. Trying next server...", flush=True)
+        else:
+            print(f"❌ [BOT {bot_id}] Server {server_num} failed/timeout. Moving to next server...", flush=True)
 
     return None
 
@@ -313,7 +327,6 @@ def process_single_content(m_url):
         if any(k in h_low for k in ["/category/", "?sort=", "whatsapp", "telegram"]): continue
 
         res = None
-        # 💡 1080p Seedha Skip!
         if "1080p" in t_low or "1080" in h_low: 
             continue 
         elif "720p" in t_low or "720" in h_low: 
@@ -370,10 +383,10 @@ def process_single_content(m_url):
             if f_path: 
                 upload_success = upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
                 if upload_success:
-                    print(f"🎉 [BOT {BOT_ID}] Movie Secured! Skipping other servers/resolutions to save time.", flush=True)
-                    break # Jaise hi movie mili, Break!
+                    print(f"🎉 [BOT {BOT_ID}] Movie Secured! Skipping remaining servers.", flush=True)
+                    break 
         else:
-            print(f"⚠️ [BOT {BOT_ID}] No valid servers found on {res_label} page.", flush=True)
+            print(f"⚠️ [BOT {BOT_ID}] No servers found on {res_label} page.", flush=True)
             
     if not servers_found_any:
         print(f"❌ [BOT {BOT_ID}] All resolutions failed for '{clean_name}'.", flush=True)
@@ -390,7 +403,7 @@ def run_bot():
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
         futures = []
         for m_url in movie_links[:MAX_MOVIES_PER_RUN]:
-            if (time.time() - start_time) > 20000: break # GitHub Time Limit Protector
+            if (time.time() - start_time) > 20000: break 
             futures.append(executor.submit(process_single_content, m_url))
         
         concurrent.futures.wait(futures)
