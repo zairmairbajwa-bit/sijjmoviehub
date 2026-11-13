@@ -123,7 +123,7 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
 def get_resolution_links(movie_page_url):
     try:
         resp = session.get(movie_page_url, timeout=15)
-        resolutions = []
+        resolutions = {}
         
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL):
             href = match.group(1)
@@ -142,14 +142,10 @@ def get_resolution_links(movie_page_url):
             elif "1080p" in text or "1080" in low_link:
                 continue 
                 
-            if res_label:
-                resolutions.append((res_label, link))
+            if res_label and res_label not in resolutions:
+                resolutions[res_label] = link
                 
-        unique_res = {}
-        for r, l in resolutions:
-            if r not in unique_res:
-                unique_res[r] = l
-        return unique_res
+        return resolutions
     except:
         return {}
 
@@ -222,13 +218,14 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT EXCLUSIVE LOOP: Iterates keys one by one (e.g. 480p first, fully finish upload, THEN 720p)
+    # 💡 STRICT SEQUENTIAL BLOCK: 480p must fully download, upload, and sync BEFORE 720p even starts!
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
-        download_link = resolution_links[res_label]
         
+        download_link = resolution_links[res_label]
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
+        
         f_path = download_with_aria2(download_link, wd)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
@@ -240,6 +237,9 @@ def process_single_content(m_url):
             else:
                 try: os.remove(f_path)
                 except: pass
+        
+        # 💡 Force a small breathing pause between resolutions
+        time.sleep(2)
 
     shutil.rmtree(wd, ignore_errors=True)
     return True
