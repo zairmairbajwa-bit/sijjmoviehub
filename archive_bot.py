@@ -147,6 +147,23 @@ def get_resolution_links(movie_page_url):
     except:
         return {}
 
+# 💡 NEW FIX: Parse the intermediate page to get the real video link!
+def resolve_actual_download_link(url):
+    try:
+        print(f"🔍 [BOT {BOT_ID}] Resolving actual file link from: {url}", flush=True)
+        resp = session.get(url, timeout=15)
+        
+        for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+            href = match.group(1)
+            if ".mp4" in href.lower() or ".mkv" in href.lower() or "download" in href.lower():
+                if "http" in href and not any(skip in href.lower() for skip in ["whatsapp", "telegram", "facebook"]):
+                    print(f"🎯 Found Direct Link: {href[:50]}...", flush=True)
+                    return href
+        return url
+    except Exception as e:
+        print(f"⚠️ Error resolving link: {e}", flush=True)
+        return url
+
 def download_with_aria2(url, work_dir):
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
@@ -216,26 +233,32 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 ABSOLUTELY ISOLATED RESOLUTION PIPELINE: 480p fully downloads, uploads, and syncs FIRST!
+    # 💡 STRICT SEQUENTIAL PIPELINE WITH DIRECT LINK EXTRACTION & DEBUG LOGS
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
             
-        download_link = resolution_links[res_label]
+        intermediate_link = resolution_links[res_label]
+        actual_download_link = resolve_actual_download_link(intermediate_link)
+        
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
-        f_path = download_with_aria2(download_link, wd)
+        f_path = download_with_aria2(actual_download_link, wd)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 30:
-                print(f"🟢 [BOT {BOT_ID}] Downloaded ({file_size_mb:.2f}MB). Uploading to Archive...", flush=True)
+                print(f"🟢 [BOT {BOT_ID}] Downloaded successfully ({file_size_mb:.2f}MB). Uploading to Archive...", flush=True)
                 upload_success = upload_and_sync(meta, str(unique_key), ident, res_label, f_path, BOT_ID)
                 if upload_success:
                     print(f"🎉 [BOT {BOT_ID}] Completed & Synced: {tmdb_meta['title']} [{res_label}]", flush=True)
             else:
+                print(f"❌ [BOT {BOT_ID}] File too small ({file_size_mb:.2f}MB). It's an HTML page/error, not the movie! Deleted.", flush=True)
                 try: os.remove(f_path)
                 except: pass
-        
+        else:
+            print(f"❌ [BOT {BOT_ID}] aria2c failed to download any file for {res_label}.", flush=True)
+            
+        # Hard lock pause before moving to 720p
         time.sleep(3)
 
     shutil.rmtree(wd, ignore_errors=True)
@@ -248,7 +271,9 @@ def run_bot():
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
     start_time = time.time()
     
-    for p_num in range(1, 100):
+    # Infinite pagination sweep, strictly 1 page at a time. No limits!
+    p_num = 1
+    while True:
         if (time.time() - start_time) > 25000:
             break
             
@@ -270,15 +295,17 @@ def run_bot():
             if not page_movie_links:
                 break
                 
-            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly 1 by 1...", flush=True)
+            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing sequentially...", flush=True)
             
-            # 💡 ONE BY ONE STRICT PIPELINE WITHOUT ANY LIMITS
+            # Process exactly one movie completely before touching the next
             for m_url in page_movie_links:
                 process_single_content(m_url)
                 
         except Exception as e:
             print(f"⚠️ [BOT {BOT_ID}] Error scanning page {p_num}: {e}", flush=True)
             break
+            
+        p_num += 1
 
     print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE!", flush=True)
 
