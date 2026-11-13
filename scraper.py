@@ -218,7 +218,7 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT SEQUENTIAL RESOLUTION LOOP (One by one, strictly isolated)
+    # 💡 STRICT SEQUENTIAL ISOLATED LOOP: 1 resolution at a time, strictly waiting for upload & sync before next!
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
@@ -238,12 +238,12 @@ def process_single_content(m_url):
                 try: os.remove(f_path)
                 except: pass
         
-        # 💡 Guard pause to ensure zero thread overlap
         time.sleep(3)
 
     shutil.rmtree(wd, ignore_errors=True)
     return True
 
+# 💡 PURE 1-BY-1 PAGE & MOVIE SCANNER (Never collects 500 links together!)
 def run_bot():
     category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
     base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
@@ -274,8 +274,9 @@ def run_bot():
             if not page_movie_links:
                 break
                 
-            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly one by one...", flush=True)
+            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly 1 by 1...", flush=True)
             
+            # 💡 ONE BY ONE STRICT PIPELINE: Pick 1 movie -> Download -> Upload -> Sync -> Then next movie!
             for m_url in page_movie_links:
                 if total_downloaded >= MAX_MOVIES_TOTAL:
                     break
