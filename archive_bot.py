@@ -7,13 +7,12 @@ import requests
 import subprocess
 import internetarchive as ia
 import shutil
-import random
 import concurrent.futures
 
-# === SECURE CREDENTIALS & NEW DOMAIN ===
+# === SECURE CREDENTIALS & NEW FILMYFLY DOMAIN ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
-BASE_DOMAIN = "https://www.filmyzilla84.com"
+BASE_DOMAIN = "https://filmy-hd.online"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 TOTAL_BOTS = 8
@@ -22,7 +21,7 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-# 💡 500 MOVIE LIMIT & 1-BY-1 DOWNLOAD
+# 💡 500 MOVIE TARGET PER RUN & FAST CONCURRENT FLOW
 MAX_MOVIES_PER_RUN = 500
 MAX_CONCURRENT_TASKS = 1 
 
@@ -34,193 +33,164 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
+# 💡 BOT ASSIGNED CATEGORIES & A-Z ALPHABET SLUGS (FilmyFly Structure)
 BOT_TARGETS = {
-    1: "category/405/2026-latest-bollywood-movies",
-    2: "category/398/2025-latest-bollywood-movies",
-    3: "category/347/2024-latest-bollywood-movies",
-    4: "category/266/New-bollywood-movies-2023",
-    5: "category/250/New-bollywood-movies-2022",
-    6: "category/251/New-bollywood-movies-2021",
-    7: "category/252/Latest-bollywood-movies-2020",
-    8: "category/253/Latest-bollywood-movies-2019"
+    1: "bollywood-hindi-movies/",
+    2: "hollywood-hindi-movies/",
+    3: "bollywood-hindi-movies/", # Extra backup category
+    4: "imdb-top-movies/",
+    5: "punjabi-movies/",
+    6: "south-hindi-dubbed-movie/",
+    7: "web-series/",
+    8: "animation-movies/"
 }
 
 def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
-def clean_title_for_tmdb(raw_title):
-    if "Catalog" in raw_title or "Latest Bollywood" in raw_title or "FilmyZilla" in raw_title:
-        return None
-        
-    match = re.search(r'^(.+?)(?:\s+[\(\[]?(19\d{2}|20\d{2})[\)\]]?)', raw_title)
-    if match:
-        clean = match.group(1).strip()
-    else:
-        clean = raw_title
-        
-    clean = re.sub(r'(?i)(Bollywood Hindi Movie|Hollywood Hindi Movie|Hindi Movie|South Hindi Dubbed|HQCam Movie|in HD Filmyzilla|Filmyzilla|Hindi Dubbed|Download|Free|Bollywood).*', '', clean)
-    clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|webrip|1080p|720p|480p|hevc|esub|dual audio|web series).*', '', clean)
+def clean_title_for_db(raw_title):
+    if not raw_title or "FilmyFly" in raw_title:
+        return "Unknown_Title"
+    clean = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download).*', '', raw_title)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-def get_bot_state():
-    return [] 
-
-def save_bot_state(visited_pages):
-    pass 
-
 def is_valid_movie_url(url):
     low = url.lower()
-    if "/movie/" in low and low.endswith(".html"):
+    if ".html" in low and not any(x in low for x in ["/page/", "/category/", "dmca", "contact", "privacy"]):
         return True
     return False
 
+# 💡 COMPREHENSIVE SWEEP: Front Page + Next Pagination + A-Z Letters
 def get_strict_movies_for_bot():
     movie_links = set()
-    visited_pages = set(get_bot_state())
+    category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
+    base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
     
-    category_slug = BOT_TARGETS.get(BOT_ID)
-    base_cat_url = f"{BASE_DOMAIN}/{category_slug}/default/"
+    print(f"🔥 [BOT {BOT_ID}] DEEP SWEEP START: {category_slug}", flush=True)
     
-    print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
-    
-    for p_num in range(1, 51): 
-        p_url = f"{base_cat_url}{p_num}.html"
-        if p_url in visited_pages: continue
-        
+    # 1. Front Page & Pagination Sweep
+    for p_num in range(1, 41):
+        p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         try:
             print(f"📄 [BOT {BOT_ID}] Scanning Page {p_num}: {p_url}", flush=True)
             resp = session.get(p_url, timeout=15)
-            if resp.status_code == 404 or "Not Found" in resp.text: 
-                print(f"🛑 [BOT {BOT_ID}] Reached end of category pages at Page {p_num}.", flush=True)
-                break 
+            if resp.status_code != 200:
+                break
                 
             found_any = False
             for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
-                link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
+                href = match.group(1)
+                link = urllib.parse.urljoin(BASE_DOMAIN, href)
                 if is_valid_movie_url(link):
                     if link not in movie_links:
                         movie_links.add(link)
                         found_any = True
             
-            visited_pages.add(p_url)
-            if not found_any: 
-                print(f"⚠️ [BOT {BOT_ID}] No movies found on Page {p_num}. End of list.", flush=True)
+            if not found_any and p_num > 1:
                 break
         except Exception:
             break
 
+    # 2. A to Z Alphabetical Sorting Sweep (A=32 to Z=57)
+    print(f"🔤 [BOT {BOT_ID}] Starting A-Z Alphabetical Index Sweep...", flush=True)
+    for alphabet_id in range(32, 58):
+        az_url = f"{base_cat_url}?letter={alphabet_id}"
+        try:
+            resp = session.get(az_url, timeout=10)
+            if resp.status_code == 200:
+                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+                    link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
+                    if is_valid_movie_url(link):
+                        movie_links.add(link)
+        except Exception:
+            pass
+
+    print(f"🎯 [BOT {BOT_ID}] Total Unique Movies Collected: {len(movie_links)}", flush=True)
     return list(movie_links)
 
-def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
-    try:
-        ext = ".mp4"
-        release_year = meta.get("release_date", "2026")
-        safe_title = clean_filename(meta['title'])
-        file_name = f"{safe_title}_{release_year}{part_suffix}_{res_label}_{tmdb_id}{ext}"
-        tp = os.path.join(os.path.dirname(f_path), file_name)
-        
-        if f_path != tp: shutil.move(f_path, tp)
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} [{res_label}]...", flush=True)
-            try:
-                r = ia.upload(
-                    ident, files=[tp], 
-                    metadata={"title": f"{meta['title']} {part_suffix} ({release_year})", "mediatype": "movies"}, 
-                    access_key=IA_ACCESS, secret_key=IA_SECRET
-                )
+# 💡 UPLOAD WITH PERSISTENT RETRY (Never Skip on Network Drop)
+def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
+    ext = ".mp4"
+    release_year = meta.get("release_date", "2026")
+    safe_title = clean_filename(meta['title'])
+    file_name = f"{safe_title}_{release_year}_{res_label}_{unique_key}{ext}"
+    tp = os.path.join(os.path.dirname(f_path), file_name)
+    
+    if f_path != tp: 
+        shutil.move(f_path, tp)
+    
+    attempt = 0
+    while True:
+        attempt += 1
+        print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}): {meta['title']} [{res_label}]...", flush=True)
+        try:
+            r = ia.upload(
+                ident, files=[tp], 
+                metadata={"title": f"{meta['title']} ({release_year})", "mediatype": "movies"}, 
+                access_key=IA_ACCESS, secret_key=IA_SECRET
+            )
+            
+            if r and r[0].status_code == 200:
+                print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing to Firebase...", flush=True)
+                archive_link = f"https://archive.org/download/{ident}/{file_name}"
+                db_key = f"url_{res_label}"
                 
-                if r and r[0].status_code == 200:
-                    print(f"✅ [BOT {bot_id}] {res_label} UPLOAD SUCCESS! Syncing to DB...", flush=True)
-                    archive_link = f"https://archive.org/download/{ident}/{file_name}"
-                    db_key = f"url_{res_label}{part_suffix.replace('-', '_')}"
-                    
-                    meta[db_key] = archive_link
-                    meta["stream_url"] = archive_link 
-                    
-                    requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps({db_key: archive_link, "stream_url": archive_link}), timeout=15)
-                    requests.patch(f"{FIREBASE_URL}/movies/{tmdb_id}.json", data=json.dumps(meta), timeout=15)
-                    
-                    os.remove(tp)
-                    return True
-            except Exception:
-                time.sleep(5)
+                meta[db_key] = archive_link
+                meta["stream_url"] = archive_link 
                 
-        try: os.remove(tp)
-        except: pass
-        return False
-    except:
-        return False
+                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json", data=json.dumps({db_key: archive_link, "stream_url": archive_link}), timeout=15)
+                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json", data=json.dumps(meta), timeout=15)
+                
+                try: os.remove(tp)
+                except: pass
+                return True
+        except Exception as e:
+            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 15 seconds before retry...", flush=True)
+            time.sleep(15) # Wait and retry infinitely until successful, ensuring zero skip!
 
-# 💡 SABHI SERVERS KO EXTRACT KAREGA (Chahe 4 hon ya 6, koi skip nahi hoga)
-def get_server_links(res_page_url):
+def get_resolution_links(movie_page_url):
     try:
-        session.get(res_page_url, timeout=15)
-        resp = session.get(res_page_url, timeout=15)
-        servers = []
+        resp = session.get(movie_page_url, timeout=15)
+        resolutions = []
+        
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL):
-            link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
+            href = match.group(1)
             text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
+            link = urllib.parse.urljoin(BASE_DOMAIN, href)
+            
             low_link = link.lower()
-            
-            if not low_link.startswith("http"): continue 
-            if low_link == BASE_DOMAIN.lower() or low_link == BASE_DOMAIN.lower() + "/": continue
-            
-            ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram", "vpn", "app", "ads", "betting"]
-            if any(k in low_link for k in ignore_keywords): continue
-            
-            is_server = False
-            if "server" in text or "server" in low_link or "/verified/" in low_link or "download" in text:
-                is_server = True
-            elif ".mp4" in low_link or ".mkv" in low_link:
-                is_server = True
+            if any(k in low_link for k in ["whatsapp", "telegram", "facebook", "category", "javascript", "dmca"]):
+                continue
                 
-            if is_server:
-                servers.append((text, link))
-        
-        unique_servers = []
-        seen_links = set()
-        for t, l in servers:
-            if l not in seen_links:
-                unique_servers.append((t, l))
-                seen_links.add(l)
-
-        # Saare available servers ko number wise tarteeb dena taake koi chhoote na
-        s_dict = {}
-        others = []
-        for t, l in unique_servers:
-            comb = t + " " + l
-            matched_num = None
-            for n in range(1, 10):
-                if f"server {n}" in comb or f"server-{n}" in comb or f"server{n}" in comb or f"/{n}/" in comb:
-                    matched_num = n
-                    break
-            if matched_num:
-                if matched_num not in s_dict:
-                    s_dict[matched_num] = []
-                s_dict[matched_num].append(l)
-            else:
-                others.append(l)
+            res_label = None
+            if "720p" in text or "720" in low_link:
+                res_label = "720p"
+            elif "480p" in text or "300mb" in text or "480" in low_link:
+                res_label = "480p"
+            elif "1080p" in text or "1080" in low_link:
+                continue # Skip 1080p to save storage and keep fast
                 
-        sorted_servers = []
-        for num in sorted(s_dict.keys()):
-            sorted_servers.extend(s_dict[num])
-        sorted_servers.extend(others)
-        
-        return sorted_servers
+            if res_label:
+                resolutions.append((res_label, link))
+                
+        # Unique resolutions
+        unique_res = {}
+        for r, l in resolutions:
+            if r not in unique_res:
+                unique_res[r] = l
+        return unique_res
     except:
-        return []
+        return {}
 
-def download_with_aria2(url, work_dir, referer_url):
+def download_with_aria2(url, work_dir):
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "4", "-s", "4", 
         "-c", "--max-tries=3", "--retry-wait=2", "--connect-timeout=15",
-        "--content-disposition-default-utf8=true", f"--referer={referer_url}",
+        "--content-disposition-default-utf8=true",
         "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         url
     ]
@@ -244,192 +214,84 @@ def download_with_aria2(url, work_dir, referer_url):
             
     return largest_file
 
-# 💡 STRICT SEQUENTIAL CHECK: Jab tak saare servers check na ho jayen, loop nahi tutega!
-def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
-    total_servers = len(server_links)
-    print(f"🔍 [BOT {bot_id}] Found {total_servers} servers to check for {res_label}.", flush=True)
-
-    for i, s_link in enumerate(server_links):
-        server_num = i + 1
-        print(f"🔄 [BOT {bot_id}] Trying Server {server_num}/{total_servers}: {s_link[:50]}...", flush=True) 
-        
-        actual_download_url = s_link
-        try:
-            r_head = session.get(s_link, headers={"Referer": referer}, timeout=10, allow_redirects=True)
-            if r_head.status_code == 200:
-                matches = re.findall(r'href=["\']([^"\']+?\.(?:mp4|mkv)[^"\']*?)["\']', r_head.text, re.IGNORECASE)
-                if matches:
-                    for m in matches:
-                        full_m = urllib.parse.urljoin(s_link, m)
-                        if "download" in full_m.lower() or "dl." in full_m.lower() or "server" in full_m.lower():
-                            actual_download_url = full_m
-                            break
-        except Exception:
-            pass
-
-        f_path = download_with_aria2(actual_download_url, work_dir, s_link)
-        
-        if f_path:
-            file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
-            if file_size_mb > 50: 
-                print(f"🟢 [BOT {bot_id}] SUCCESS! Server {server_num} delivered movie ({file_size_mb:.2f}MB).", flush=True)
-                return f_path # Asli movie mil gayi, ab aage check karne ki zaroorat nahi
-            else:
-                print(f"⚠️ [BOT {bot_id}] Server {server_num} gave popup/error (0.01MB). Blocking popup & moving to next server...", flush=True)
-                try:
-                    with open(f_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        html_content = f.read()
-                    os.remove(f_path)
-                    
-                    inner_links = []
-                    matches = re.findall(r'href=["\']([^"\']+?)["\']', html_content, re.IGNORECASE)
-                    for m in matches:
-                        m_low = m.lower()
-                        if not any(x in m_low for x in ["whatsapp", "telegram", "facebook", "vpn", "app", "category", "javascript"]):
-                            inner_links.append(urllib.parse.urljoin(s_link, m))
-                            
-                    for inner_link in inner_links[:2]:
-                        inner_f_path = download_with_aria2(inner_link, work_dir, s_link)
-                        if inner_f_path:
-                            inner_size_mb = os.path.getsize(inner_f_path) / (1024 * 1024)
-                            if inner_size_mb > 50:
-                                print(f"🟢 [BOT {bot_id}] SUCCESS from inner link on Server {server_num}!", flush=True)
-                                return inner_f_path
-                            else:
-                                os.remove(inner_f_path)
-                except Exception:
-                    pass
-        else:
-            print(f"❌ [BOT {bot_id}] Server {server_num} failed/timeout. Moving to next server...", flush=True)
-
-    print(f"❌ [BOT {bot_id}] All {total_servers} servers failed for {res_label}.", flush=True)
-    return None
-
 def process_single_content(m_url):
     try:
-        session.headers.update({"Referer": BASE_DOMAIN})
-        m_resp = session.get(m_url, timeout=25)
-    except: return
+        m_resp = session.get(m_url, timeout=20)
+    except: 
+        return
     
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
-    raw_title = title_match.group(1) if title_match else ""
+    raw_title = title_match.group(1) if title_match else "Movie"
+    clean_name = clean_title_for_db(raw_title)
     
-    clean_name = clean_title_for_tmdb(raw_title)
-    if not clean_name: 
-        return
-
-    # TMDB Par Query
-    url_tmdb = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_name)}&language=en-US"
-    try:
-        t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
-        if not t_res: 
-            print(f"❌ [BOT {BOT_ID}] TMDB NOT FOUND SKIPPED (Cleaned Name: '{clean_name}')", flush=True)
-            return
-        tmdb_data = t_res[0]
-    except: return
-        
-    tmdb_id = str(tmdb_data["id"])
+    # Unique key based on URL hash to prevent collisions
+    unique_key = abs(hash(m_url)) % (10 ** 10)
     
+    # 💡 CHECK DATABASE FIRST (Skip only if already fully processed)
     try:
-        res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
+        res_check = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
-            if data.get("url_720p") or data.get("stream_url") or data.get("url_480p"): 
-                print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Already in DB)", flush=True)
-                return 
-    except: pass
+            if data.get("url_480p") or data.get("url_720p") or data.get("stream_url"):
+                print(f"⏭️ [BOT {BOT_ID}] ALREADY IN DB SKIPPED: '{clean_name}'", flush=True)
+                return
+    except: 
+        pass
 
-    resolution_pages = [] 
-    for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
-        t_low = link_text.lower()
-        h_low = href.lower()
-        
-        if h_low.startswith("javascript") or h_low == BASE_DOMAIN.lower() or h_low == BASE_DOMAIN.lower() + "/": continue
-        if any(k in h_low for k in ["/category/", "?sort=", "whatsapp", "telegram"]): continue
+    resolution_links = get_resolution_links(m_url)
+    if not resolution_links:
+        print(f"⚠️ [BOT {BOT_ID}] No resolutions found for: '{clean_name}'", flush=True)
+        return
 
-        res = None
-        if "1080p" in t_low or "1080" in h_low: 
-            continue 
-        elif "720p" in t_low or "720" in h_low: 
-            res = "720p"
-        elif "480p" in t_low or "300mb" in t_low or "480" in h_low or "300mb" in h_low: 
-            res = "480p"
-        elif "download mp4" in t_low or "download full movie" in t_low or "/download/" in h_low: 
-            res = "480p" 
-        
-        if res and (".html" in h_low or "/movie/" in h_low or "/download/" in h_low or "/server/" in h_low):
-            full_link = urllib.parse.urljoin(BASE_DOMAIN, href)
-            if full_link != m_url: 
-                resolution_pages.append((res, full_link))
-
-    unique_res_pages = {}
-    for res, link in resolution_pages:
-        if res not in unique_res_pages:
-            unique_res_pages[res] = link
-            
-    if not unique_res_pages: 
-        direct_servers = get_server_links(m_url)
-        if direct_servers:
-             unique_res_pages["480p"] = m_url
-        else:
-            print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download page nahi mila)", flush=True)
-            return
-
-    wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
+    wd = f"/tmp/sijj_{BOT_ID}_{unique_key}"
     os.makedirs(wd, exist_ok=True)
     
-    t_name = tmdb_data.get('title') or tmdb_data.get('name', 'Untitled')
-    release_year = str(tmdb_data.get('release_date') or tmdb_data.get('first_air_date', '2026'))[:4]
-    ident = f"sijjhub-media-{tmdb_id}-{int(time.time())}"
+    year_match = re.search(r'(19\d{2}|20\d{2})', raw_title)
+    release_year = year_match.group(1) if year_match else "2026"
+    ident = f"sijjhub-media-{unique_key}-{int(time.time())}"
     
     meta = {
-        "tmdb_id": tmdb_id, "id": tmdb_id, "title": t_name, 
-        "overview": tmdb_data.get("overview", ""), "release_date": release_year, 
-        "poster": f"https://image.tmdb.org/t/p/w500{tmdb_data.get('poster_path')}" if tmdb_data.get('poster_path') else "", 
-        "hindi_dubbed": True, "category": f"Bollywood {release_year}",
+        "tmdb_id": str(unique_key), "id": str(unique_key), "title": clean_name, 
+        "overview": raw_title, "release_date": release_year, 
+        "poster": "", "hindi_dubbed": True, "category": BOT_TARGETS.get(BOT_ID, "movies"),
         "is_series": False
     }
 
-    servers_found_any = False
-    for res_label, res_page_url in unique_res_pages.items():
-        print(f"📥 [BOT {BOT_ID}] ENTERING {res_label} PAGE: {t_name[:30]}...", flush=True)
+    # Process each resolution sequentially (480p then 720p)
+    for res_label, download_link in resolution_links.items():
+        print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {clean_name[:35]}...", flush=True)
         
-        server_links = get_server_links(res_page_url)
-        if not server_links and res_page_url == m_url:
-             server_links = [res_page_url]
-
-        if server_links:
-            servers_found_any = True
-            f_path = hit_and_trial_download(server_links, wd, res_page_url, BOT_ID, res_label, meta['title'])
-            if f_path: 
-                upload_success = upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
+        f_path = download_with_aria2(download_link, wd)
+        if f_path:
+            file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
+            if file_size_mb > 30: # Valid movie file size
+                print(f"🟢 [BOT {BOT_ID}] Downloaded successfully ({file_size_mb:.2f}MB). Uploading...", flush=True)
+                upload_success = upload_and_sync(meta, str(unique_key), ident, res_label, f_path, BOT_ID)
                 if upload_success:
-                    print(f"🎉 [BOT {BOT_ID}] Movie Secured! Skipping remaining resolutions.", flush=True)
-                    break 
-        else:
-            print(f"⚠️ [BOT {BOT_ID}] No servers found on {res_label} page.", flush=True)
-            
-    if not servers_found_any:
-        print(f"❌ [BOT {BOT_ID}] All resolutions failed for '{clean_name}'.", flush=True)
+                    print(f"🎉 [BOT {BOT_ID}] Completed movie: {clean_name} [{res_label}]", flush=True)
+            else:
+                try: os.remove(f_path)
+                except: pass
 
     shutil.rmtree(wd, ignore_errors=True)
 
 def run_bot():
-    print(f"🔥 Starting Bot ID: {BOT_ID} (Duty: 20{27-BOT_ID}) - Account #{actual_bot_account_id}", flush=True)
+    print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {BOT_TARGETS.get(BOT_ID)}", flush=True)
 
     movie_links = get_strict_movies_for_bot()
-    print(f"🎯 [BOT {BOT_ID}] Found {len(movie_links)} targets. Initiating Downloads...", flush=True)
+    print(f"🎯 [BOT {BOT_ID}] Collected {len(movie_links)} movies. Starting download pipeline...", flush=True)
 
     start_time = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
         futures = []
         for m_url in movie_links[:MAX_MOVIES_PER_RUN]:
-            if (time.time() - start_time) > 20000: break 
+            if (time.time() - start_time) > 25000: 
+                break 
             futures.append(executor.submit(process_single_content, m_url))
         
         concurrent.futures.wait(futures)
         
-    print(f"🏁 [BOT {BOT_ID}] FACTORY RUN COMPLETE!", flush=True)
+    print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE!", flush=True)
 
 if __name__ == "__main__":
     run_bot()
