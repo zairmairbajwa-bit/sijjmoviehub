@@ -219,64 +219,61 @@ def download_with_aria2(url, work_dir, referer_url):
             
     return largest_file
 
-# 💡 DEEP SNIFFER BYPASS: Ab bot redirect pages (Verified) ke andar ghus kar asli link pakrega!
+# 💡 HUMAN SIMULATION (Fast Extractor): Pehle dekhega, phir file download karega!
 def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
     for s_link in server_links:
         print(f"🔄 [BOT {bot_id}] Trying Server: {s_link[:50]}...", flush=True) 
         
-        actual_dl_link = s_link
+        final_dl_link = None
         
-        # 3 Levels Deep Check (Agar link ke andar link ho)
-        for _ in range(3):
-            try:
-                if ".mp4" in actual_dl_link.lower() or ".mkv" in actual_dl_link.lower():
-                    break # Asli movie mil gayi, aur deep mat jao
-                    
-                if "/verified/" in actual_dl_link.lower() or "/download/" in actual_dl_link.lower() or "server" in actual_dl_link.lower():
-                    s_resp = session.get(actual_dl_link, timeout=15)
-                    found_next = False
-                    
-                    # Type 1: Meta Refresh Redirect
+        try:
+            # Agar link seedha mp4 hai
+            if ".mp4" in s_link.lower() or ".mkv" in s_link.lower():
+                final_dl_link = s_link
+            else:
+                # Agar yeh ek server/verified page hai, toh isay "open" karo (Popups nahi chalenge!)
+                s_resp = session.get(s_link, timeout=15)
+                
+                # Page ke andar saaray links scan karo
+                matches = re.findall(r'href=["\']([^"\']+?)["\']', s_resp.text, re.IGNORECASE)
+                
+                # Jo link sach mein movie ka ho (.mp4), usay pakar lo!
+                for m in matches:
+                    if ".mp4" in m.lower() or ".mkv" in m.lower():
+                        final_dl_link = m
+                        if not final_dl_link.startswith("http"):
+                            final_dl_link = urllib.parse.urljoin(s_link, final_dl_link)
+                        break
+                        
+                # Agar direct .mp4 na mile aur koi redirect ho
+                if not final_dl_link:
                     meta_match = re.search(r'url=([^"\'>]+)', s_resp.text, re.IGNORECASE)
                     if meta_match:
-                        actual_dl_link = urllib.parse.urljoin(actual_dl_link, meta_match.group(1))
-                        found_next = True
-                        continue
-                        
-                    # Type 2: Javascript Redirect
-                    js_match = re.search(r'location\.(?:href|replace)\s*=?\s*[\'"]([^\'"]+)[\'"]', s_resp.text, re.IGNORECASE)
-                    if js_match:
-                        actual_dl_link = urllib.parse.urljoin(actual_dl_link, js_match.group(1))
-                        found_next = True
-                        continue
+                        final_dl_link = urllib.parse.urljoin(s_link, meta_match.group(1))
 
-                    # Type 3: Normal Link (A tag)
-                    matches = re.findall(r'href=["\']([^"\']+?)["\']', s_resp.text, re.IGNORECASE)
-                    for m in matches:
-                        m_low = m.lower()
-                        if ".mp4" in m_low or ".mkv" in m_low or "server" in m_low or "dl." in m_low or "/download/" in m_low:
-                            if not any(x in m_low for x in ["whatsapp", "telegram", "facebook", "vpn", "app", "category"]):
-                                actual_dl_link = urllib.parse.urljoin(actual_dl_link, m)
-                                found_next = True
-                                break
-                                
-                    if not found_next:
-                        break # Mazeed koi link nahi mila, jo hai usay try karo
-                else:
-                    break
-            except:
-                break
+        except Exception as e:
+            pass
             
-        f_path = download_with_aria2(actual_dl_link, work_dir, actual_dl_link)
+        # Agar actual movie link nahi mila, toh agle server par chalo (time zaya na karo)
+        if not final_dl_link:
+            print(f"⚠️ [BOT {bot_id}] Real video link hidden/missing. Trying next server...", flush=True)
+            continue
+            
+        print(f"🔎 [BOT {bot_id}] Found Real File! Handing over to Downloader...", flush=True)
+            
+        # Ab Aria2 ko pakka .mp4 link jayega! (Koi 0.01MB fake file nahi aayegi)
+        f_path = download_with_aria2(final_dl_link, work_dir, final_dl_link)
+        
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 50: 
                 print(f"🟢 [BOT {bot_id}] SUCCESS! Downloaded {file_size_mb:.2f}MB.", flush=True)
-                return f_path # Kamyab! Agle servers ko haath nahi lagayega
+                return f_path # Kamyab! Agle servers ko haath nahi lagayega, break karega!
             else:
                 print(f"⚠️ [BOT {bot_id}] FAKE FILE ({file_size_mb:.2f}MB). Deleting & trying next...", flush=True)
                 os.remove(f_path)
-    return None
+                
+    return None # Agar koi bhi server kaam na kare
 
 def process_single_content(m_url):
     try:
@@ -307,7 +304,7 @@ def process_single_content(m_url):
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
-            if data.get("url_720p") or data.get("stream_url"): 
+            if data.get("url_720p") or data.get("stream_url") or data.get("url_480p"): 
                 print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Already in DB)", flush=True)
                 return 
     except: pass
@@ -321,7 +318,7 @@ def process_single_content(m_url):
         if any(k in h_low for k in ["/category/", "?sort=", "whatsapp", "telegram"]): continue
 
         res = None
-        # 💡 FIX: "1080p" seedha Skip! Aur Agar resolution na likhi ho toh usay 480p maan kar pakar lo!
+        # 💡 1080p Seedha Skip!
         if "1080p" in t_low or "1080" in h_low: 
             continue 
         elif "720p" in t_low or "720" in h_low: 
@@ -329,7 +326,7 @@ def process_single_content(m_url):
         elif "480p" in t_low or "300mb" in t_low or "480" in h_low or "300mb" in h_low: 
             res = "480p"
         elif "download mp4" in t_low or "download full movie" in t_low or "/download/" in h_low: 
-            res = "480p" # Fallback resolution
+            res = "480p" # Generic button fallback
         
         if res and (".html" in h_low or "/movie/" in h_low or "/download/" in h_low or "/server/" in h_low):
             full_link = urllib.parse.urljoin(BASE_DOMAIN, href)
@@ -341,7 +338,6 @@ def process_single_content(m_url):
         if res not in unique_res_pages:
             unique_res_pages[res] = link
             
-    # 💡 FIX: Agar koi bhi page nahi mila, toh ho sakta hai servers issi page par hon!
     if not unique_res_pages: 
         direct_servers = get_server_links(m_url)
         if direct_servers:
@@ -380,7 +376,7 @@ def process_single_content(m_url):
                 upload_success = upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
                 if upload_success:
                     print(f"🎉 [BOT {BOT_ID}] Movie Secured! Skipping other servers/resolutions to save time.", flush=True)
-                    break # 💡 FIX: "Jesay hi movie mili, baqi sab chhor de!" Seedha agli movie par jump!
+                    break # 💡 FIX: "Jaise hi movie mili, seedha agli movie par jump!"
         else:
             print(f"⚠️ [BOT {BOT_ID}] No valid servers found on {res_label} page.", flush=True)
             
