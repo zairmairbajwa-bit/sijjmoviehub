@@ -152,33 +152,6 @@ def get_resolution_links(movie_page_url):
     except:
         return {}
 
-def resolve_actual_download_link(url):
-    try:
-        print(f"🔍 [BOT {BOT_ID}] Resolving l.php link: {url}", flush=True)
-        resp = session.get(url, timeout=20, allow_redirects=True)
-        current_url = resp.url
-        
-        if "l.php" not in current_url and current_url != url:
-            print(f"🎯 Redirected to: {current_url[:60]}...", flush=True)
-            return current_url
-            
-        meta_match = re.search(r'(?i)<meta\s+http-equiv=["\']refresh["\']\s+content=["\']\d+;\s*url=([^"\']+)["\']', resp.text)
-        if meta_match:
-            new_link = urllib.parse.urljoin(current_url, meta_match.group(1))
-            print(f"🎯 Meta Refresh Found: {new_link[:60]}...", flush=True)
-            return new_link
-
-        js_match = re.search(r'(?i)window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', resp.text)
-        if js_match:
-            new_link = urllib.parse.urljoin(current_url, js_match.group(1))
-            print(f"🎯 JS Redirect Found: {new_link[:60]}...", flush=True)
-            return new_link
-                
-        return current_url
-    except Exception as e:
-        print(f"⚠️ Error resolving link: {e}", flush=True)
-        return url
-
 def download_with_aria2(url, work_dir):
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
@@ -217,7 +190,7 @@ def process_single_content(m_url):
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
     
-    # 💡 THE ONLY CHANGE: Yahan permanent ID ban rahi hai jo kabhi change nahi hogi!
+    # 💡 Pakki ID yahan banegi taake duplicate download na ho!
     unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
@@ -253,8 +226,8 @@ def process_single_content(m_url):
         if res_label not in resolution_links:
             continue
             
-        intermediate_link = resolution_links[res_label]
-        actual_download_link = resolve_actual_download_link(intermediate_link)
+        # 💡 Yahan direct link download hoga, koi smart resolver ka chakar nahi!
+        actual_download_link = resolution_links[res_label]
         
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
