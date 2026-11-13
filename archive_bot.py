@@ -147,19 +147,40 @@ def get_resolution_links(movie_page_url):
     except:
         return {}
 
-# 💡 NEW FIX: Parse the intermediate page to get the real video link!
+# 💡 THE FIX: Smart Resolver for l.php links!
 def resolve_actual_download_link(url):
     try:
-        print(f"🔍 [BOT {BOT_ID}] Resolving actual file link from: {url}", flush=True)
-        resp = session.get(url, timeout=15)
+        print(f"🔍 [BOT {BOT_ID}] Resolving l.php link: {url}", flush=True)
+        # Follow HTTP redirects aggressively
+        resp = session.get(url, timeout=20, allow_redirects=True)
+        current_url = resp.url
         
+        if "l.php" not in current_url and current_url != url:
+            print(f"🎯 Redirected to: {current_url[:60]}...", flush=True)
+            return current_url
+            
+        # Check for Meta Refresh Redirect in HTML
+        meta_match = re.search(r'(?i)<meta\s+http-equiv=["\']refresh["\']\s+content=["\']\d+;\s*url=([^"\']+)["\']', resp.text)
+        if meta_match:
+            new_link = urllib.parse.urljoin(current_url, meta_match.group(1))
+            print(f"🎯 Meta Refresh Found: {new_link[:60]}...", flush=True)
+            return new_link
+
+        # Check for Javascript Redirect
+        js_match = re.search(r'(?i)window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', resp.text)
+        if js_match:
+            new_link = urllib.parse.urljoin(current_url, js_match.group(1))
+            print(f"🎯 JS Redirect Found: {new_link[:60]}...", flush=True)
+            return new_link
+
+        # Look for the final external download button link
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
             href = match.group(1)
-            if ".mp4" in href.lower() or ".mkv" in href.lower() or "download" in href.lower():
-                if "http" in href and not any(skip in href.lower() for skip in ["whatsapp", "telegram", "facebook"]):
-                    print(f"🎯 Found Direct Link: {href[:50]}...", flush=True)
-                    return href
-        return url
+            if href.startswith("http") and "filmy-hd.online" not in href.lower() and not any(skip in href.lower() for skip in ["whatsapp", "telegram", "facebook", "twitter"]):
+                print(f"🎯 External Button Link Found: {href[:60]}...", flush=True)
+                return href
+                
+        return current_url
     except Exception as e:
         print(f"⚠️ Error resolving link: {e}", flush=True)
         return url
@@ -201,7 +222,6 @@ def process_single_content(m_url):
     
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
-    
     unique_key = abs(hash(m_url)) % (10 ** 10)
     
     try:
@@ -233,7 +253,7 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT SEQUENTIAL PIPELINE WITH DIRECT LINK EXTRACTION & DEBUG LOGS
+    # 💡 STRICT SEQUENTIAL & ISOLATED RESOLUTION DOWNLOAD
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
@@ -252,13 +272,12 @@ def process_single_content(m_url):
                 if upload_success:
                     print(f"🎉 [BOT {BOT_ID}] Completed & Synced: {tmdb_meta['title']} [{res_label}]", flush=True)
             else:
-                print(f"❌ [BOT {BOT_ID}] File too small ({file_size_mb:.2f}MB). It's an HTML page/error, not the movie! Deleted.", flush=True)
+                print(f"❌ [BOT {BOT_ID}] File too small ({file_size_mb:.2f}MB). Download blocked or fake file! Deleted.", flush=True)
                 try: os.remove(f_path)
                 except: pass
         else:
             print(f"❌ [BOT {BOT_ID}] aria2c failed to download any file for {res_label}.", flush=True)
             
-        # Hard lock pause before moving to 720p
         time.sleep(3)
 
     shutil.rmtree(wd, ignore_errors=True)
@@ -271,7 +290,7 @@ def run_bot():
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
     start_time = time.time()
     
-    # Infinite pagination sweep, strictly 1 page at a time. No limits!
+    # Strictly 1 by 1 page scanning without limits
     p_num = 1
     while True:
         if (time.time() - start_time) > 25000:
@@ -295,9 +314,8 @@ def run_bot():
             if not page_movie_links:
                 break
                 
-            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing sequentially...", flush=True)
+            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing sequentially 1 by 1...", flush=True)
             
-            # Process exactly one movie completely before touching the next
             for m_url in page_movie_links:
                 process_single_content(m_url)
                 
