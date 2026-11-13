@@ -7,7 +7,6 @@ import requests
 import subprocess
 import internetarchive as ia
 import shutil
-import concurrent.futures
 
 # === SECURE CREDENTIALS & NEW FILMYFLY DOMAIN ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
@@ -21,9 +20,7 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-# 💡 500 MOVIE TARGET PER RUN & FAST CONCURRENT FLOW
 MAX_MOVIES_PER_RUN = 500
-MAX_CONCURRENT_TASKS = 1 
 
 session = requests.Session()
 session.headers.update({
@@ -33,11 +30,11 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 BOT ASSIGNED CATEGORIES & A-Z ALPHABET SLUGS (FilmyFly Structure)
+# 💡 BOT ASSIGNED CATEGORIES (FilmyFly Structure)
 BOT_TARGETS = {
     1: "bollywood-hindi-movies/",
     2: "hollywood-hindi-movies/",
-    3: "bollywood-hindi-movies/", # Extra backup category
+    3: "bollywood-hindi-movies/", 
     4: "imdb-top-movies/",
     5: "punjabi-movies/",
     6: "south-hindi-dubbed-movie/",
@@ -49,19 +46,51 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
-def clean_title_for_db(raw_title):
-    if not raw_title or "FilmyFly" in raw_title:
-        return "Unknown_Title"
-    clean = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download).*', '', raw_title)
-    clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
-    clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
-    return clean.replace('-', ' ').replace('_', ' ').strip()
-
 def is_valid_movie_url(url):
     low = url.lower()
     if ".html" in low and not any(x in low for x in ["/page/", "/category/", "dmca", "contact", "privacy"]):
         return True
     return False
+
+# 💡 FETCH TMDB METADATA (Returns cleaned metadata if matched, else fallback to raw)
+def fetch_tmdb_metadata(raw_title):
+    # Extract clean movie title and year from raw page title
+    clean_query = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download|Web-DL).*', '', raw_title)
+    year_match = re.search(r'\((\d{4})\)|\[(\d{4})\]', clean_query)
+    release_year = year_match.group(1) or year_match.group(2) if year_match else "2026"
+    
+    clean_query = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean_query)
+    clean_query = re.sub(r'\(.*?\)|\[.*?\]', '', clean_query).strip()
+    
+    # Query TMDB API
+    search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_query)}"
+    try:
+        resp = requests.get(search_url, timeout=10)
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            if results:
+                m = results[0] # Best match
+                return {
+                    "title": m.get("title", clean_query),
+                    "overview": m.get("overview", raw_title),
+                    "release_date": m.get("release_date", release_year)[:4],
+                    "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get("poster_path") else "",
+                    "tmdb_matched": True
+                }
+    except:
+        pass
+        
+    # Fallback if TMDB match fails (Still download, don't skip!)
+    fallback_title = clean_query.replace('-', ' ').replace('_', ' ').strip()
+    if not fallback_title:
+        fallback_title = "Unknown_Movie"
+    return {
+        "title": fallback_title,
+        "overview": raw_title,
+        "release_date": release_year,
+        "poster": "",
+        "tmdb_matched": False
+    }
 
 # 💡 COMPREHENSIVE SWEEP: Front Page + Next Pagination + A-Z Letters
 def get_strict_movies_for_bot():
@@ -111,7 +140,7 @@ def get_strict_movies_for_bot():
     print(f"🎯 [BOT {BOT_ID}] Total Unique Movies Collected: {len(movie_links)}", flush=True)
     return list(movie_links)
 
-# 💡 UPLOAD WITH PERSISTENT RETRY (Never Skip on Network Drop)
+# 💡 UPLOAD WITH PERSISTENT RETRY
 def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     ext = ".mp4"
     release_year = meta.get("release_date", "2026")
@@ -149,7 +178,7 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
                 return True
         except Exception as e:
             print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 15 seconds before retry...", flush=True)
-            time.sleep(15) # Wait and retry infinitely until successful, ensuring zero skip!
+            time.sleep(15)
 
 def get_resolution_links(movie_page_url):
     try:
@@ -171,12 +200,11 @@ def get_resolution_links(movie_page_url):
             elif "480p" in text or "300mb" in text or "480" in low_link:
                 res_label = "480p"
             elif "1080p" in text or "1080" in low_link:
-                continue # Skip 1080p to save storage and keep fast
+                continue 
                 
             if res_label:
                 resolutions.append((res_label, link))
                 
-        # Unique resolutions
         unique_res = {}
         for r, l in resolutions:
             if r not in unique_res:
@@ -214,6 +242,7 @@ def download_with_aria2(url, work_dir):
             
     return largest_file
 
+# 💡 STRICT SEQUENTIAL PROCESSING WITH TMDB HYBRID FALLBACK
 def process_single_content(m_url):
     try:
         m_resp = session.get(m_url, timeout=20)
@@ -222,53 +251,53 @@ def process_single_content(m_url):
     
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
-    clean_name = clean_title_for_db(raw_title)
     
-    # Unique key based on URL hash to prevent collisions
     unique_key = abs(hash(m_url)) % (10 ** 10)
     
-    # 💡 CHECK DATABASE FIRST (Skip only if already fully processed)
+    # 1. Check Database First (Skip if already fully processed)
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
             if data.get("url_480p") or data.get("url_720p") or data.get("stream_url"):
-                print(f"⏭️ [BOT {BOT_ID}] ALREADY IN DB SKIPPED: '{clean_name}'", flush=True)
+                print(f"⏭️ [BOT {BOT_ID}] ALREADY IN DB SKIPPED: '{raw_title[:30]}'", flush=True)
                 return
     except: 
         pass
 
+    # 2. Fetch TMDB Metadata (If matched -> clean title/poster; If not matched -> fallback raw download)
+    tmdb_meta = fetch_tmdb_metadata(raw_title)
+    print(f"🎬 [BOT {BOT_ID}] Processing: '{tmdb_meta['title']}' (TMDB Matched: {tmdb_meta['tmdb_matched']})", flush=True)
+
     resolution_links = get_resolution_links(m_url)
     if not resolution_links:
-        print(f"⚠️ [BOT {BOT_ID}] No resolutions found for: '{clean_name}'", flush=True)
+        print(f"⚠️ [BOT {BOT_ID}] No resolutions found for: '{tmdb_meta['title']}'", flush=True)
         return
 
     wd = f"/tmp/sijj_{BOT_ID}_{unique_key}"
     os.makedirs(wd, exist_ok=True)
     
-    year_match = re.search(r'(19\d{2}|20\d{2})', raw_title)
-    release_year = year_match.group(1) if year_match else "2026"
     ident = f"sijjhub-media-{unique_key}-{int(time.time())}"
     
     meta = {
-        "tmdb_id": str(unique_key), "id": str(unique_key), "title": clean_name, 
-        "overview": raw_title, "release_date": release_year, 
-        "poster": "", "hindi_dubbed": True, "category": BOT_TARGETS.get(BOT_ID, "movies"),
+        "tmdb_id": str(unique_key), "id": str(unique_key), "title": tmdb_meta['title'], 
+        "overview": tmdb_meta['overview'], "release_date": tmdb_meta['release_date'], 
+        "poster": tmdb_meta['poster'], "hindi_dubbed": True, "category": BOT_TARGETS.get(BOT_ID, "movies"),
         "is_series": False
     }
 
-    # Process each resolution sequentially (480p then 720p)
+    # 3. Sequential Resolution Loop (480p -> Upload -> 720p -> Upload)
     for res_label, download_link in resolution_links.items():
-        print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {clean_name[:35]}...", flush=True)
+        print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
         f_path = download_with_aria2(download_link, wd)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
-            if file_size_mb > 30: # Valid movie file size
-                print(f"🟢 [BOT {BOT_ID}] Downloaded successfully ({file_size_mb:.2f}MB). Uploading...", flush=True)
+            if file_size_mb > 30:
+                print(f"🟢 [BOT {BOT_ID}] Downloaded ({file_size_mb:.2f}MB). Uploading to Archive...", flush=True)
                 upload_success = upload_and_sync(meta, str(unique_key), ident, res_label, f_path, BOT_ID)
                 if upload_success:
-                    print(f"🎉 [BOT {BOT_ID}] Completed movie: {clean_name} [{res_label}]", flush=True)
+                    print(f"🎉 [BOT {BOT_ID}] Completed & Synced: {tmdb_meta['title']} [{res_label}]", flush=True)
             else:
                 try: os.remove(f_path)
                 except: pass
@@ -279,17 +308,13 @@ def run_bot():
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {BOT_TARGETS.get(BOT_ID)}", flush=True)
 
     movie_links = get_strict_movies_for_bot()
-    print(f"🎯 [BOT {BOT_ID}] Collected {len(movie_links)} movies. Starting download pipeline...", flush=True)
+    print(f"🎯 [BOT {BOT_ID}] Collected {len(movie_links)} movies. Starting strict sequential pipeline...", flush=True)
 
     start_time = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS) as executor:
-        futures = []
-        for m_url in movie_links[:MAX_MOVIES_PER_RUN]:
-            if (time.time() - start_time) > 25000: 
-                break 
-            futures.append(executor.submit(process_single_content, m_url))
-        
-        concurrent.futures.wait(futures)
+    for m_url in movie_links[:MAX_MOVIES_PER_RUN]:
+        if (time.time() - start_time) > 25000: 
+            break
+        process_single_content(m_url)
         
     print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE!", flush=True)
 
