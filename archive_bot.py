@@ -7,6 +7,7 @@ import requests
 import subprocess
 import internetarchive as ia
 import shutil
+import hashlib  # 💡 NEW: Fix for permanent IDs!
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
@@ -89,10 +90,9 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     if f_path != tp: 
         shutil.move(f_path, tp)
     
-    attempt = 0
-    while True:
-        attempt += 1
-        print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}): {meta['title']} [{res_label}]...", flush=True)
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}/{max_attempts}): {meta['title']} [{res_label}]...", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -115,8 +115,13 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
                 except: pass
                 return True
         except Exception as e:
-            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 15 seconds before retry...", flush=True)
-            time.sleep(15)
+            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 45 seconds before retry...", flush=True)
+            time.sleep(45)
+
+    print(f"❌ [BOT {bot_id}] Upload failed after {max_attempts} attempts. Skipping {res_label} to prevent lockup.", flush=True)
+    try: os.remove(tp)
+    except: pass
+    return False
 
 def get_resolution_links(movie_page_url):
     try:
@@ -147,11 +152,9 @@ def get_resolution_links(movie_page_url):
     except:
         return {}
 
-# 💡 THE FIX: Smart Resolver for l.php links!
 def resolve_actual_download_link(url):
     try:
         print(f"🔍 [BOT {BOT_ID}] Resolving l.php link: {url}", flush=True)
-        # Follow HTTP redirects aggressively
         resp = session.get(url, timeout=20, allow_redirects=True)
         current_url = resp.url
         
@@ -159,21 +162,18 @@ def resolve_actual_download_link(url):
             print(f"🎯 Redirected to: {current_url[:60]}...", flush=True)
             return current_url
             
-        # Check for Meta Refresh Redirect in HTML
         meta_match = re.search(r'(?i)<meta\s+http-equiv=["\']refresh["\']\s+content=["\']\d+;\s*url=([^"\']+)["\']', resp.text)
         if meta_match:
             new_link = urllib.parse.urljoin(current_url, meta_match.group(1))
             print(f"🎯 Meta Refresh Found: {new_link[:60]}...", flush=True)
             return new_link
 
-        # Check for Javascript Redirect
         js_match = re.search(r'(?i)window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', resp.text)
         if js_match:
             new_link = urllib.parse.urljoin(current_url, js_match.group(1))
             print(f"🎯 JS Redirect Found: {new_link[:60]}...", flush=True)
             return new_link
 
-        # Look for the final external download button link
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
             href = match.group(1)
             if href.startswith("http") and "filmy-hd.online" not in href.lower() and not any(skip in href.lower() for skip in ["whatsapp", "telegram", "facebook", "twitter"]):
@@ -222,7 +222,9 @@ def process_single_content(m_url):
     
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
-    unique_key = abs(hash(m_url)) % (10 ** 10)
+    
+    # 💡 THE FIX: Permanent deterministic ID generation using MD5!
+    unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json", timeout=5)
@@ -253,7 +255,6 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT SEQUENTIAL & ISOLATED RESOLUTION DOWNLOAD
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
@@ -290,7 +291,6 @@ def run_bot():
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
     start_time = time.time()
     
-    # Strictly 1 by 1 page scanning without limits
     p_num = 1
     while True:
         if (time.time() - start_time) > 25000:
