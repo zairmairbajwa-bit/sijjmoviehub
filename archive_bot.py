@@ -30,6 +30,7 @@ session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
     "Referer": BASE_DOMAIN
 })
 
@@ -155,9 +156,10 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     except:
         return False
 
-# 💡 PERFECT SEQUENTIAL SERVER SORTER (Server 1, 2, 3, 4 ki tarteeb)
+# 💡 SABHI SERVERS KO EXTRACT KAREGA (Chahe 4 hon ya 6, koi skip nahi hoga)
 def get_server_links(res_page_url):
     try:
+        session.get(res_page_url, timeout=15)
         resp = session.get(res_page_url, timeout=15)
         servers = []
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL):
@@ -172,17 +174,14 @@ def get_server_links(res_page_url):
             if any(k in low_link for k in ignore_keywords): continue
             
             is_server = False
-            if "server" in text or "server" in low_link or "/verified/" in low_link:
+            if "server" in text or "server" in low_link or "/verified/" in low_link or "download" in text:
                 is_server = True
             elif ".mp4" in low_link or ".mkv" in low_link:
-                is_server = True
-            elif "download" in text and "app" not in text and "vpn" not in text:
                 is_server = True
                 
             if is_server:
                 servers.append((text, link))
         
-        # Unique servers
         unique_servers = []
         seen_links = set()
         for t, l in servers:
@@ -190,23 +189,28 @@ def get_server_links(res_page_url):
                 unique_servers.append((t, l))
                 seen_links.add(l)
 
-        # 💡 Tarteeb dena: Server 1 pehle, phir 2, phir 3, phir 4
-        s1, s2, s3, s4, others = [], [], [], [], []
+        # Saare available servers ko number wise tarteeb dena taake koi chhoote na
+        s_dict = {}
+        others = []
         for t, l in unique_servers:
             comb = t + " " + l
-            if "server 1" in comb or "server-1" in comb:
-                s1.append(l)
-            elif "server 2" in comb or "server-2" in comb:
-                s2.append(l)
-            elif "server 3" in comb or "server-3" in comb:
-                s3.append(l)
-            elif "server 4" in comb or "server-4" in comb:
-                s4.append(l)
+            matched_num = None
+            for n in range(1, 10):
+                if f"server {n}" in comb or f"server-{n}" in comb or f"server{n}" in comb or f"/{n}/" in comb:
+                    matched_num = n
+                    break
+            if matched_num:
+                if matched_num not in s_dict:
+                    s_dict[matched_num] = []
+                s_dict[matched_num].append(l)
             else:
                 others.append(l)
                 
-        # Bilkul wahi sequence jo aap chahte hain: 1 -> 2 -> 3 -> 4
-        sorted_servers = s1 + s2 + s3 + s4 + others
+        sorted_servers = []
+        for num in sorted(s_dict.keys()):
+            sorted_servers.extend(s_dict[num])
+        sorted_servers.extend(others)
+        
         return sorted_servers
     except:
         return []
@@ -217,7 +221,8 @@ def download_with_aria2(url, work_dir, referer_url):
         "-x", "4", "-s", "4", 
         "-c", "--max-tries=3", "--retry-wait=2", "--connect-timeout=15",
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
-        "--header=User-Agent: Mozilla/5.0", url
+        "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        url
     ]
     try: 
         subprocess.run(cmd, check=True, timeout=7200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -239,28 +244,43 @@ def download_with_aria2(url, work_dir, referer_url):
             
     return largest_file
 
-# 💡 1 BY 1 SEQUENTIAL HIT & TRIAL (Pehle Server 1, phir 2, phir 3...)
+# 💡 STRICT SEQUENTIAL CHECK: Jab tak saare servers check na ho jayen, loop nahi tutega!
 def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
+    total_servers = len(server_links)
+    print(f"🔍 [BOT {bot_id}] Found {total_servers} servers to check for {res_label}.", flush=True)
+
     for i, s_link in enumerate(server_links):
         server_num = i + 1
-        print(f"🔄 [BOT {bot_id}] Trying Server {server_num}: {s_link[:50]}...", flush=True) 
+        print(f"🔄 [BOT {bot_id}] Trying Server {server_num}/{total_servers}: {s_link[:50]}...", flush=True) 
         
-        # Direct Click!
-        f_path = download_with_aria2(s_link, work_dir, referer)
+        actual_download_url = s_link
+        try:
+            r_head = session.get(s_link, headers={"Referer": referer}, timeout=10, allow_redirects=True)
+            if r_head.status_code == 200:
+                matches = re.findall(r'href=["\']([^"\']+?\.(?:mp4|mkv)[^"\']*?)["\']', r_head.text, re.IGNORECASE)
+                if matches:
+                    for m in matches:
+                        full_m = urllib.parse.urljoin(s_link, m)
+                        if "download" in full_m.lower() or "dl." in full_m.lower() or "server" in full_m.lower():
+                            actual_download_url = full_m
+                            break
+        except Exception:
+            pass
+
+        f_path = download_with_aria2(actual_download_url, work_dir, s_link)
         
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 50: 
                 print(f"🟢 [BOT {bot_id}] SUCCESS! Server {server_num} delivered movie ({file_size_mb:.2f}MB).", flush=True)
-                return f_path # Kamyab! Baqi servers ko haath nahi lagayega
+                return f_path # Asli movie mil gayi, ab aage check karne ki zaroorat nahi
             else:
-                print(f"⚠️ [BOT {BOT_ID}] Server {server_num} gave popup/error (0.01MB). Switching to next server...", flush=True)
+                print(f"⚠️ [BOT {bot_id}] Server {server_num} gave popup/error (0.01MB). Blocking popup & moving to next server...", flush=True)
                 try:
                     with open(f_path, 'r', encoding='utf-8', errors='ignore') as f:
                         html_content = f.read()
                     os.remove(f_path)
                     
-                    # Inner link sniffer
                     inner_links = []
                     matches = re.findall(r'href=["\']([^"\']+?)["\']', html_content, re.IGNORECASE)
                     for m in matches:
@@ -282,6 +302,7 @@ def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, t
         else:
             print(f"❌ [BOT {bot_id}] Server {server_num} failed/timeout. Moving to next server...", flush=True)
 
+    print(f"❌ [BOT {bot_id}] All {total_servers} servers failed for {res_label}.", flush=True)
     return None
 
 def process_single_content(m_url):
@@ -383,7 +404,7 @@ def process_single_content(m_url):
             if f_path: 
                 upload_success = upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
                 if upload_success:
-                    print(f"🎉 [BOT {BOT_ID}] Movie Secured! Skipping remaining servers.", flush=True)
+                    print(f"🎉 [BOT {BOT_ID}] Movie Secured! Skipping remaining resolutions.", flush=True)
                     break 
         else:
             print(f"⚠️ [BOT {BOT_ID}] No servers found on {res_label} page.", flush=True)
