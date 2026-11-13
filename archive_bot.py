@@ -13,7 +13,7 @@ import concurrent.futures
 # === SECURE CREDENTIALS & NEW DOMAIN ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
-BASE_DOMAIN = "https://www.filmyzilla84.com" # Naya Domain Set Kar Diya Hai
+BASE_DOMAIN = "https://www.filmyzilla84.com" # Naya Domain
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 TOTAL_BOTS = 8
@@ -22,7 +22,7 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-# 💡 500 MOVIE LIMIT & 1-BY-1 DOWNLOAD (Disk space safe rahegi)
+# 💡 500 MOVIE LIMIT & 1-BY-1 DOWNLOAD
 MAX_MOVIES_PER_RUN = 500
 MAX_CONCURRENT_TASKS = 1 
 
@@ -33,7 +33,6 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 8 BOTS KI NAYI DUTIES AUR EXACT RASTE LAGA DIYE HAIN
 BOT_TARGETS = {
     1: "category/405/2026-latest-bollywood-movies",
     2: "category/398/2025-latest-bollywood-movies",
@@ -49,6 +48,7 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
+# 💡 NAYA SUPER CLEANER: Ab "Hindi Movie" aur "Free" bhi saaf karega
 def clean_title_for_tmdb(raw_title):
     if "Catalog" in raw_title or "Latest Bollywood" in raw_title or "FilmyZilla" in raw_title:
         return None
@@ -56,12 +56,14 @@ def clean_title_for_tmdb(raw_title):
     clean = raw_title
     clean = re.sub(r'(?i)Bollywood Hindi Movie.*', '', clean)
     clean = re.sub(r'(?i)Hollywood Hindi Movie.*', '', clean)
+    clean = re.sub(r'(?i)Hindi Movie.*', '', clean) # Website ka naya tag remove
     clean = re.sub(r'(?i)South Hindi Dubbed.*', '', clean)
     clean = re.sub(r'(?i)HQCam Movie.*', '', clean)
     clean = re.sub(r'(?i)in HD Filmyzilla.*', '', clean)
     clean = re.sub(r'(?i)Filmyzilla', '', clean)
     clean = re.sub(r'(?i)Hindi Dubbed.*', '', clean)
     clean = re.sub(r'(?i)\bDownload\b', '', clean)
+    clean = re.sub(r'(?i)\bFree\b', '', clean) # Naya "Free" lafz remove
     clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|webrip|1080p|720p|480p|hevc|esub|dual audio|web series).*', '', clean)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
@@ -80,10 +82,8 @@ def save_bot_state(visited_pages):
         requests.put(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", json={"last_visited_pages": list(visited_pages)[-200:]}) 
     except: pass
 
-# 💡 SMART URL VALIDATOR (Ab sirf aur sirf asli Movies pakrega!)
 def is_valid_movie_url(url):
     low = url.lower()
-    # Asli movies ke URL mein hamesha '/movie/' hota hai. Menu links mein nahi hota.
     if "/movie/" in low and low.endswith(".html"):
         return True
     return False
@@ -97,7 +97,6 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] STRICT SWEEP: {category_slug}", flush=True)
     
-    # 💡 NAYA RASTA: 1.html, 2.html, 3.html...
     for p_num in range(1, 51): 
         p_url = f"{base_cat_url}{p_num}.html"
         
@@ -167,14 +166,13 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                 print(f"❌ [BOT {bot_id}] Archive Error: {e}", flush=True)
                 time.sleep(10)
                 
-        # Agar upload poori tarah fail ho jaye toh file delete kar do taake space na ruke
         try: os.remove(tp)
         except: pass
         return False
     except:
         return False
 
-# 💡 SMART SERVER HUNTER: Resolution page se Servers dhundega (Priority: Server 3, Server 4)
+# 💡 NAYA SMART SERVER HUNTER: Servers ke hidden links directly pakrega
 def get_server_links(res_page_url):
     try:
         resp = session.get(res_page_url, timeout=15)
@@ -182,18 +180,19 @@ def get_server_links(res_page_url):
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE):
             link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
             text = match.group(2).lower()
-            if "server" in text or "download" in text:
+            
+            # Direct hidden download links ko track karega
+            if "/download/" in link.lower() or "server" in text or "download" in text:
                 servers.append((text, link))
         
         priority_servers = []
         other_servers = []
         for text, link in servers:
-            if "server 3" in text or "server 4" in text:
+            if "server 3" in text or "server 4" in text or "server-3" in link or "server-4" in link:
                 priority_servers.append(link)
             else:
                 other_servers.append(link)
         
-        # Pehle Server 3/4 try karega, uske baad baqi
         return priority_servers + other_servers
     except:
         return []
@@ -215,14 +214,13 @@ def download_with_aria2(url, work_dir, referer_url):
                 return os.path.join(root, file)
     return None
 
-# 💡 HIT AND TRIAL SYSTEM: Servers ko bari bari check karega, jo pehla chal gaya uspe rukk jayega
 def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
     for s_link in server_links:
         print(f"🔄 [BOT {bot_id}] Trying Server: {s_link.split('/')[-1][:20]}...", flush=True)
         f_path = download_with_aria2(s_link, work_dir, referer)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
-            if file_size_mb > 50: # File 50MB se bari hai toh matlab real movie hai
+            if file_size_mb > 50: 
                 print(f"🟢 [BOT {bot_id}] SUCCESS! Downloading from this server.", flush=True)
                 return f_path
             else:
@@ -243,7 +241,6 @@ def process_single_content(m_url):
     if not clean_name: 
         return
 
-    # TMDB Par Check
     url_tmdb = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_name)}&language=en-US"
     try:
         t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
@@ -255,7 +252,6 @@ def process_single_content(m_url):
         
     tmdb_id = str(tmdb_data["id"])
     
-    # 💡 FIREBASE DB CHECK (Duplicate rokne ke liye)
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
@@ -265,7 +261,6 @@ def process_single_content(m_url):
                 return 
     except: pass
 
-    # 💡 MOVIE PAGE SE RESOLUTION PAGES DHUNDHNA
     resolution_pages = [] 
     for href, link_text in re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', m_resp.text, re.IGNORECASE | re.DOTALL):
         t_low = link_text.lower()
@@ -280,7 +275,6 @@ def process_single_content(m_url):
             full_link = urllib.parse.urljoin(BASE_DOMAIN, href)
             resolution_pages.append((res, full_link))
 
-    # Sirf unique resolution pages rakhne ke liye
     unique_res_pages = {}
     for res, link in resolution_pages:
         if res not in unique_res_pages:
@@ -305,7 +299,6 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # Har resolution (480p, 720p) ke page par ja kar server hunt karega
     for res_label, res_page_url in unique_res_pages.items():
         print(f"📥 [BOT {BOT_ID}] ENTERING {res_label} PAGE: {t_name}...", flush=True)
         server_links = get_server_links(res_page_url)
