@@ -68,12 +68,12 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-# 💡 MEMORY WIPE: Bot hamesha Page 1 se Fresh start karega, pichli failures bhool jayega
+# 💡 MEMORY WIPE: Bot hamesha Page 1 se Fresh start karega
 def get_bot_state():
     return [] 
 
 def save_bot_state(visited_pages):
-    pass # Ab history save karne ki zaroorat nahi kyunke 500 limit set hai
+    pass 
 
 def is_valid_movie_url(url):
     low = url.lower()
@@ -165,7 +165,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     except:
         return False
 
-# 💡 AGGRESSIVE SERVER HUNTER: Ab yeh koi bhi valid link chhorega nahi!
+# 💡 FIX: HTTP FILTER APPLIED (javascript: links ko bahar nikal diya gaya hai)
 def get_server_links(res_page_url):
     try:
         resp = session.get(res_page_url, timeout=15)
@@ -173,24 +173,23 @@ def get_server_links(res_page_url):
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL):
             link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
             
-            # HTML tags hata kar sirf text extract karega
             text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
             low_link = link.lower()
             
-            # Navigation aur faltu links ko filter karega
+            # 💡 JAVASCRIPT PROTECTOR: Sirf HTTP/HTTPS links aage jayenge!
+            if not low_link.startswith("http"): continue 
+            
             if low_link == BASE_DOMAIN.lower() or low_link == BASE_DOMAIN.lower() + "/": continue
             ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram"]
             if any(k in low_link for k in ignore_keywords): continue
             
-            # Agar text mein kaam ka lafz ho YA link external ho toh usay server maan lega
             if any(x in text for x in ["server", "download", "file", "click", "here", "link", "now", "hd"]):
                 servers.append((text, link))
             elif not low_link.startswith(BASE_DOMAIN.lower()): 
-                servers.append((text, link)) # External links are usually direct servers
+                servers.append((text, link)) 
             elif "/download/" in low_link or "/server/" in low_link or "dl" in low_link:
                 servers.append((text, link))
         
-        # Unique servers (takae duplicate try na kare)
         unique_servers = []
         seen_links = set()
         for t, l in servers:
@@ -198,7 +197,6 @@ def get_server_links(res_page_url):
                 unique_servers.append((t, l))
                 seen_links.add(l)
 
-        # Server 3 aur 4 ko hamesha priority dega
         priority_servers = []
         other_servers = []
         for text, link in unique_servers:
