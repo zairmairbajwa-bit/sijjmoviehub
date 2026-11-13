@@ -13,7 +13,7 @@ import concurrent.futures
 # === SECURE CREDENTIALS & NEW DOMAIN ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
-BASE_DOMAIN = "https://www.filmyzilla84.com" # Naya Domain
+BASE_DOMAIN = "https://www.filmyzilla84.com"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 TOTAL_BOTS = 8
@@ -48,28 +48,30 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
+# 💡 LASER-FOCUSED TMDB CLEANER: Sirf Naam aur Saal pakrega!
 def clean_title_for_tmdb(raw_title):
     if "Catalog" in raw_title or "Latest Bollywood" in raw_title or "FilmyZilla" in raw_title:
         return None
         
-    clean = raw_title
-    clean = re.sub(r'(?i)Bollywood Hindi Movie.*', '', clean)
-    clean = re.sub(r'(?i)Hollywood Hindi Movie.*', '', clean)
-    clean = re.sub(r'(?i)Hindi Movie.*', '', clean) 
-    clean = re.sub(r'(?i)South Hindi Dubbed.*', '', clean)
-    clean = re.sub(r'(?i)HQCam Movie.*', '', clean)
-    clean = re.sub(r'(?i)in HD Filmyzilla.*', '', clean)
-    clean = re.sub(r'(?i)Filmyzilla', '', clean)
-    clean = re.sub(r'(?i)Hindi Dubbed.*', '', clean)
-    clean = re.sub(r'(?i)\bDownload\b', '', clean)
-    clean = re.sub(r'(?i)\bFree\b', '', clean) 
+    # Magic Logic: Shuru se lekar saal (e.g., 2022) tak pakro, baqi aage ka sab kuch uday do!
+    # Example: "Jersey 2022 Bollywood Movie" -> "Jersey"
+    match = re.search(r'^(.+?)(?:\s+[\(\[]?(19\d{2}|20\d{2})[\)\]]?)', raw_title)
+    
+    if match:
+        clean = match.group(1).strip()
+    else:
+        clean = raw_title
+        
+    # Extra safety cleaner
+    clean = re.sub(r'(?i)(Bollywood Hindi Movie|Hollywood Hindi Movie|Hindi Movie|South Hindi Dubbed|HQCam Movie|in HD Filmyzilla|Filmyzilla|Hindi Dubbed|Download|Free|Bollywood).*', '', clean)
     clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|webrip|1080p|720p|480p|hevc|esub|dual audio|web series).*', '', clean)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
+    
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
 def get_bot_state():
-    return [] # Hamesha Page 1 se Fresh start karega
+    return [] # Hamesha Page 1 se Fresh start
 
 def save_bot_state(visited_pages):
     pass 
@@ -121,7 +123,6 @@ def get_strict_movies_for_bot():
 
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
     try:
-        # File jo bhi ho, usay zabardasti .mp4 banayega (taake redirect issues khatam hon)
         ext = ".mp4"
         
         release_year = meta.get("release_date", "2026")
@@ -164,7 +165,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     except:
         return False
 
-# 💡 SMART SERVER HUNTER: Sirf asli servers pakrega, kachra nahi!
+# 💡 ALL-SERVERS HUNTER & POPUP BLOCKER
 def get_server_links(res_page_url):
     try:
         resp = session.get(res_page_url, timeout=15)
@@ -174,44 +175,38 @@ def get_server_links(res_page_url):
             text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
             low_link = link.lower()
             
+            # Popup Block 1: Sirf valid web links pakrega
             if not low_link.startswith("http"): continue 
             if low_link == BASE_DOMAIN.lower() or low_link == BASE_DOMAIN.lower() + "/": continue
             
-            ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram", "vpn", "app", "ads"]
+            # Popup Block 2: Ads, VPN, aur Apps ko laat maar dega
+            ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram", "vpn", "app", "ads", "betting"]
             if any(k in low_link for k in ignore_keywords): continue
             
-            # Asli Servers ki Pehchaan
+            # Agar 'server', 'verified' ya 'download' lafz link mein hai, toh woh pakar lega
             is_server = False
-            if "server" in text and "vpn" not in text:
+            if "server" in text or "server" in low_link or "/verified/" in low_link:
                 is_server = True
             elif ".mp4" in low_link or ".mkv" in low_link:
                 is_server = True
-            elif "start download" in text or "download now" in text or "download file" in text:
+            elif "download" in text and "app" not in text and "vpn" not in text:
                 is_server = True
                 
             if is_server:
-                servers.append((text, link))
+                servers.append(link)
         
+        # Duplicate servers remove karega aur seedha saare links wapas bhej dega (Koi priority nahi, sabko bari bari test karega)
         unique_servers = []
         seen_links = set()
-        for t, l in servers:
+        for l in servers:
             if l not in seen_links:
-                unique_servers.append((t, l))
+                unique_servers.append(l)
                 seen_links.add(l)
 
-        priority_servers = []
-        other_servers = []
-        for text, link in unique_servers:
-            if "3" in text or "4" in text or "server-3" in link or "server-4" in link:
-                priority_servers.append(link)
-            else:
-                other_servers.append(link)
-        
-        return priority_servers + other_servers
+        return unique_servers
     except:
         return []
 
-# 💡 ARIA2 FILE SNIFFER: Extension ko ignore kar ke sab se bari file pakrega
 def download_with_aria2(url, work_dir, referer_url):
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
@@ -223,7 +218,7 @@ def download_with_aria2(url, work_dir, referer_url):
     try: 
         subprocess.run(cmd, check=True, timeout=7200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except: 
-        pass # Exception aane par bhi folder mein file check karega (ho sakta hai thori si ho gayi ho)
+        pass 
             
     largest_file = None
     max_size = -1
@@ -242,7 +237,6 @@ def download_with_aria2(url, work_dir, referer_url):
 
 def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
     for s_link in server_links:
-        # Pura URL print karega taake log saaf samajh aye
         print(f"🔄 [BOT {bot_id}] Trying Server: {s_link[:60]}...", flush=True) 
         f_path = download_with_aria2(s_link, work_dir, referer)
         if f_path:
@@ -268,11 +262,12 @@ def process_single_content(m_url):
     if not clean_name: 
         return
 
+    # TMDB Par Query
     url_tmdb = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_name)}&language=en-US"
     try:
         t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
         if not t_res: 
-            print(f"❌ [BOT {BOT_ID}] TMDB NOT FOUND SKIPPED: '{clean_name}'", flush=True)
+            print(f"❌ [BOT {BOT_ID}] TMDB NOT FOUND SKIPPED (Cleaned Name: '{clean_name}')", flush=True)
             return
         tmdb_data = t_res[0]
     except: return
@@ -329,6 +324,8 @@ def process_single_content(m_url):
     servers_found_any = False
     for res_label, res_page_url in unique_res_pages.items():
         print(f"📥 [BOT {BOT_ID}] ENTERING {res_label} PAGE: {t_name[:30]}...", flush=True)
+        
+        # Yeh saare servers layega popups ko ignore kar ke
         server_links = get_server_links(res_page_url)
         
         if server_links:
@@ -337,7 +334,7 @@ def process_single_content(m_url):
             if f_path: 
                 upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
         else:
-            print(f"⚠️ [BOT {BOT_ID}] No servers found on {res_label} page.", flush=True)
+            print(f"⚠️ [BOT {BOT_ID}] No valid servers found on {res_label} page.", flush=True)
             
     if not servers_found_any:
         print(f"❌ [BOT {BOT_ID}] All resolutions failed for '{clean_name}'. Moving to next.", flush=True)
