@@ -8,19 +8,16 @@ import subprocess
 import internetarchive as ia
 import shutil
 
-# === SECURE CREDENTIALS & NEW FILMYFLY DOMAIN ===
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
 BASE_DOMAIN = "https://filmy-hd.online"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
-TOTAL_BOTS = 8
-
 actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-MAX_MOVIES_PER_RUN = 500
+MAX_MOVIES_TOTAL = 500
 
 session = requests.Session()
 session.headers.update({
@@ -70,7 +67,7 @@ def fetch_tmdb_metadata(raw_title):
                     "title": m.get("title", clean_query),
                     "overview": m.get("overview", raw_title),
                     "release_date": m.get("release_date", release_year)[:4],
-                    "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get("poster_path") else "",
+                    "poster": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else "",
                     "tmdb_matched": True
                 }
     except:
@@ -80,52 +77,9 @@ def fetch_tmdb_metadata(raw_title):
     if not fallback_title:
         fallback_title = "Unknown_Movie"
     return {
-        "title": fallback_title,
-        "overview": raw_title,
-        "release_date": release_year,
-        "poster": "",
-        "tmdb_matched": False
+        "title": fallback_title, "overview": raw_title,
+        "release_date": release_year, "poster": "", "tmdb_matched": False
     }
-
-def get_strict_movies_for_bot():
-    movie_links = set()
-    category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
-    base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
-    
-    print(f"🔥 [BOT {BOT_ID}] DEEP SWEEP START: {category_slug}", flush=True)
-    
-    for p_num in range(1, 41):
-        p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
-        try:
-            resp = session.get(p_url, timeout=15)
-            if resp.status_code != 200:
-                break
-            found_any = False
-            for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
-                href = match.group(1)
-                link = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if is_valid_movie_url(link) and link not in movie_links:
-                    movie_links.add(link)
-                    found_any = True
-            if not found_any and p_num > 1:
-                break
-        except Exception:
-            break
-
-    for alphabet_id in range(32, 58):
-        az_url = f"{base_cat_url}?letter={alphabet_id}"
-        try:
-            resp = session.get(az_url, timeout=10)
-            if resp.status_code == 200:
-                for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
-                    link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
-                    if is_valid_movie_url(link):
-                        movie_links.add(link)
-        except Exception:
-            pass
-
-    print(f"🎯 [BOT {BOT_ID}] Total Unique Movies Collected: {len(movie_links)}", flush=True)
-    return list(movie_links)
 
 def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     ext = ".mp4"
@@ -228,7 +182,6 @@ def download_with_aria2(url, work_dir):
             
     return largest_file
 
-# 💡 STRICT SEQUENTIAL ITEM & RESOLUTION PIPELINE
 def process_single_content(m_url):
     try:
         m_resp = session.get(m_url, timeout=20)
@@ -246,7 +199,7 @@ def process_single_content(m_url):
             data = res_check.json()
             if data.get("url_480p") or data.get("url_720p") or data.get("stream_url"):
                 print(f"⏭️ [BOT {BOT_ID}] ALREADY IN DB SKIPPED: '{raw_title[:30]}'", flush=True)
-                return
+                return True # Handled/Skipped
     except: 
         pass
 
@@ -256,11 +209,10 @@ def process_single_content(m_url):
     resolution_links = get_resolution_links(m_url)
     if not resolution_links:
         print(f"⚠️ [BOT {BOT_ID}] No resolutions found for: '{tmdb_meta['title']}'", flush=True)
-        return
+        return False
 
     wd = f"/tmp/sijj_{BOT_ID}_{unique_key}"
     os.makedirs(wd, exist_ok=True)
-    
     ident = f"sijjhub-media-{unique_key}-{int(time.time())}"
     
     meta = {
@@ -270,7 +222,7 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 ONE-BY-ONE STRICT RESOLUTION LOOP: Download 1st -> Upload completely -> Then proceed to next resolution
+    # 💡 STRICT SEQUENTIAL RESOLUTION LOOP: 480p -> Upload -> Complete, then 720p -> Upload -> Complete
     for res_label, download_link in resolution_links.items():
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
@@ -287,20 +239,56 @@ def process_single_content(m_url):
                 except: pass
 
     shutil.rmtree(wd, ignore_errors=True)
+    return True
 
+# 💡 PURE PAGE-BY-PAGE SCANNER (Scans Page 1 -> Downloads all on Page 1 -> Moves to Page 2)
 def run_bot():
-    print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {BOT_TARGETS.get(BOT_ID)}", flush=True)
-
-    movie_links = get_strict_movies_for_bot()
-    print(f"🎯 [BOT {BOT_ID}] Collected {len(movie_links)} movies. Starting strict sequential pipeline...", flush=True)
-
+    category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
+    base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
+    
+    print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
+    total_downloaded = 0
     start_time = time.time()
-    for m_url in movie_links[:MAX_MOVIES_PER_RUN]:
-        if (time.time() - start_time) > 25000: 
+    
+    # Page by page loop
+    for p_num in range(1, 41):
+        if total_downloaded >= MAX_MOVIES_TOTAL or (time.time() - start_time) > 25000:
             break
-        process_single_content(m_url)
+            
+        p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
+        print(f"📄 [BOT {BOT_ID}] Scanning Page {p_num}: {p_url}", flush=True)
         
-    print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE!", flush=True)
+        try:
+            resp = session.get(p_url, timeout=15)
+            if resp.status_code != 200:
+                print(f"🛑 [BOT {BOT_ID}] Page {p_num} returned status {resp.status_code}. Ending scan.", flush=True)
+                break
+                
+            page_movie_links = []
+            for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+                href = match.group(1)
+                link = urllib.parse.urljoin(BASE_DOMAIN, href)
+                if is_valid_movie_url(link) and link not in page_movie_links:
+                    page_movie_links.append(link)
+            
+            if not page_movie_links:
+                print(f"🛑 [BOT {BOT_ID}] No movies found on Page {p_num}. Ending scan.", flush=True)
+                break
+                
+            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly one by one...", flush=True)
+            
+            # Process each movie on THIS page strictly sequentially before going to next page
+            for m_url in page_movie_links:
+                if total_downloaded >= MAX_MOVIES_TOTAL:
+                    break
+                process_single_content(m_url)
+                total_downloaded += 1
+                
+        except Exception as e:
+            print(f"⚠️ [BOT {BOT_ID}] Error scanning page {p_num}: {e}", flush=True)
+            break
+
+    print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE! Total processed: {total_downloaded}", flush=True)
 
 if __name__ == "__main__":
     run_bot()
