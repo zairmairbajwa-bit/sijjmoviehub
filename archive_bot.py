@@ -68,9 +68,8 @@ def clean_title_for_tmdb(raw_title):
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
-# 💡 MEMORY WIPE: Bot hamesha Page 1 se Fresh start karega
 def get_bot_state():
-    return [] 
+    return [] # Hamesha Page 1 se Fresh start karega
 
 def save_bot_state(visited_pages):
     pass 
@@ -122,8 +121,8 @@ def get_strict_movies_for_bot():
 
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
     try:
-        ext = os.path.splitext(f_path)[1].lower()
-        if ext not in [".mp4", ".mkv"]: ext = ".mp4" 
+        # File jo bhi ho, usay zabardasti .mp4 banayega (taake redirect issues khatam hon)
+        ext = ".mp4"
         
         release_year = meta.get("release_date", "2026")
         safe_title = clean_filename(meta['title'])
@@ -165,29 +164,32 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     except:
         return False
 
-# 💡 FIX: HTTP FILTER APPLIED (javascript: links ko bahar nikal diya gaya hai)
+# 💡 SMART SERVER HUNTER: Sirf asli servers pakrega, kachra nahi!
 def get_server_links(res_page_url):
     try:
         resp = session.get(res_page_url, timeout=15)
         servers = []
         for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL):
             link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
-            
             text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
             low_link = link.lower()
             
-            # 💡 JAVASCRIPT PROTECTOR: Sirf HTTP/HTTPS links aage jayenge!
             if not low_link.startswith("http"): continue 
-            
             if low_link == BASE_DOMAIN.lower() or low_link == BASE_DOMAIN.lower() + "/": continue
-            ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram"]
+            
+            ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram", "vpn", "app", "ads"]
             if any(k in low_link for k in ignore_keywords): continue
             
-            if any(x in text for x in ["server", "download", "file", "click", "here", "link", "now", "hd"]):
-                servers.append((text, link))
-            elif not low_link.startswith(BASE_DOMAIN.lower()): 
-                servers.append((text, link)) 
-            elif "/download/" in low_link or "/server/" in low_link or "dl" in low_link:
+            # Asli Servers ki Pehchaan
+            is_server = False
+            if "server" in text and "vpn" not in text:
+                is_server = True
+            elif ".mp4" in low_link or ".mkv" in low_link:
+                is_server = True
+            elif "start download" in text or "download now" in text or "download file" in text:
+                is_server = True
+                
+            if is_server:
                 servers.append((text, link))
         
         unique_servers = []
@@ -209,6 +211,7 @@ def get_server_links(res_page_url):
     except:
         return []
 
+# 💡 ARIA2 FILE SNIFFER: Extension ko ignore kar ke sab se bari file pakrega
 def download_with_aria2(url, work_dir, referer_url):
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
@@ -217,26 +220,38 @@ def download_with_aria2(url, work_dir, referer_url):
         "--content-disposition-default-utf8=true", f"--referer={referer_url}",
         "--header=User-Agent: Mozilla/5.0", url
     ]
-    try: subprocess.run(cmd, check=True, timeout=7200, stdout=subprocess.DEVNULL)
-    except: return None
+    try: 
+        subprocess.run(cmd, check=True, timeout=7200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except: 
+        pass # Exception aane par bhi folder mein file check karega (ho sakta hai thori si ho gayi ho)
             
+    largest_file = None
+    max_size = -1
     for root, dirs, files in os.walk(work_dir):
         for file in files:
-            if file.lower().endswith((".mp4", ".mkv")) and not file.endswith(".aria2"):
-                return os.path.join(root, file)
-    return None
+            if file.endswith(".aria2"): continue
+            f_path = os.path.join(root, file)
+            try:
+                size = os.path.getsize(f_path)
+                if size > max_size:
+                    max_size = size
+                    largest_file = f_path
+            except: pass
+            
+    return largest_file
 
 def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
     for s_link in server_links:
-        print(f"🔄 [BOT {bot_id}] Trying Server: {s_link.split('/')[-1][:20]}...", flush=True)
+        # Pura URL print karega taake log saaf samajh aye
+        print(f"🔄 [BOT {bot_id}] Trying Server: {s_link[:60]}...", flush=True) 
         f_path = download_with_aria2(s_link, work_dir, referer)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 50: 
-                print(f"🟢 [BOT {bot_id}] SUCCESS! Downloading from this server.", flush=True)
+                print(f"🟢 [BOT {bot_id}] SUCCESS! Downloaded {file_size_mb:.2f}MB from this server.", flush=True)
                 return f_path
             else:
-                print(f"⚠️ [BOT {bot_id}] FAKE FILE ({file_size_mb:.2f}MB). Trying next server...", flush=True)
+                print(f"⚠️ [BOT {bot_id}] FAKE FILE ({file_size_mb:.2f}MB). Deleting & trying next...", flush=True)
                 os.remove(f_path)
     return None
 
