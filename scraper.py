@@ -17,8 +17,6 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-MAX_MOVIES_TOTAL = 500
-
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -81,6 +79,7 @@ def fetch_tmdb_metadata(raw_title):
         "release_date": release_year, "poster": "", "tmdb_matched": False
     }
 
+# 💡 THE FIX: Max 5 Attempts & Safe Skip to prevent bot lockup!
 def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     ext = ".mp4"
     release_year = meta.get("release_date", "2026")
@@ -91,10 +90,9 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     if f_path != tp: 
         shutil.move(f_path, tp)
     
-    attempt = 0
-    while True:
-        attempt += 1
-        print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}): {meta['title']} [{res_label}]...", flush=True)
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}/{max_attempts}): {meta['title']} [{res_label}]...", flush=True)
         try:
             r = ia.upload(
                 ident, files=[tp], 
@@ -117,8 +115,13 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
                 except: pass
                 return True
         except Exception as e:
-            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 15 seconds before retry...", flush=True)
-            time.sleep(15)
+            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 45 seconds before retry...", flush=True)
+            time.sleep(45)
+
+    print(f"❌ [BOT {bot_id}] Upload failed after {max_attempts} attempts. Skipping {res_label} to prevent lockup.", flush=True)
+    try: os.remove(tp)
+    except: pass
+    return False
 
 def get_resolution_links(movie_page_url):
     try:
@@ -148,6 +151,39 @@ def get_resolution_links(movie_page_url):
         return resolutions
     except:
         return {}
+
+def resolve_actual_download_link(url):
+    try:
+        print(f"🔍 [BOT {BOT_ID}] Resolving l.php link: {url}", flush=True)
+        resp = session.get(url, timeout=20, allow_redirects=True)
+        current_url = resp.url
+        
+        if "l.php" not in current_url and current_url != url:
+            print(f"🎯 Redirected to: {current_url[:60]}...", flush=True)
+            return current_url
+            
+        meta_match = re.search(r'(?i)<meta\s+http-equiv=["\']refresh["\']\s+content=["\']\d+;\s*url=([^"\']+)["\']', resp.text)
+        if meta_match:
+            new_link = urllib.parse.urljoin(current_url, meta_match.group(1))
+            print(f"🎯 Meta Refresh Found: {new_link[:60]}...", flush=True)
+            return new_link
+
+        js_match = re.search(r'(?i)window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', resp.text)
+        if js_match:
+            new_link = urllib.parse.urljoin(current_url, js_match.group(1))
+            print(f"🎯 JS Redirect Found: {new_link[:60]}...", flush=True)
+            return new_link
+
+        for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
+            href = match.group(1)
+            if href.startswith("http") and "filmy-hd.online" not in href.lower() and not any(skip in href.lower() for skip in ["whatsapp", "telegram", "facebook", "twitter"]):
+                print(f"🎯 External Button Link Found: {href[:60]}...", flush=True)
+                return href
+                
+        return current_url
+    except Exception as e:
+        print(f"⚠️ Error resolving link: {e}", flush=True)
+        return url
 
 def download_with_aria2(url, work_dir):
     cmd = [
@@ -186,7 +222,6 @@ def process_single_content(m_url):
     
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
-    
     unique_key = abs(hash(m_url)) % (10 ** 10)
     
     try:
@@ -218,42 +253,45 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT SEQUENTIAL ISOLATED LOOP: 1 resolution at a time, strictly waiting for upload & sync before next!
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
             
-        download_link = resolution_links[res_label]
+        intermediate_link = resolution_links[res_label]
+        actual_download_link = resolve_actual_download_link(intermediate_link)
+        
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
-        f_path = download_with_aria2(download_link, wd)
+        f_path = download_with_aria2(actual_download_link, wd)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 30:
-                print(f"🟢 [BOT {BOT_ID}] Downloaded ({file_size_mb:.2f}MB). Uploading to Archive...", flush=True)
+                print(f"🟢 [BOT {BOT_ID}] Downloaded successfully ({file_size_mb:.2f}MB). Uploading to Archive...", flush=True)
                 upload_success = upload_and_sync(meta, str(unique_key), ident, res_label, f_path, BOT_ID)
                 if upload_success:
                     print(f"🎉 [BOT {BOT_ID}] Completed & Synced: {tmdb_meta['title']} [{res_label}]", flush=True)
             else:
+                print(f"❌ [BOT {BOT_ID}] File too small ({file_size_mb:.2f}MB). Download blocked or fake file! Deleted.", flush=True)
                 try: os.remove(f_path)
                 except: pass
-        
+        else:
+            print(f"❌ [BOT {BOT_ID}] aria2c failed to download any file for {res_label}.", flush=True)
+            
         time.sleep(3)
 
     shutil.rmtree(wd, ignore_errors=True)
     return True
 
-# 💡 PURE 1-BY-1 PAGE & MOVIE SCANNER (Never collects 500 links together!)
 def run_bot():
     category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
     base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
     
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
-    total_downloaded = 0
     start_time = time.time()
     
-    for p_num in range(1, 41):
-        if total_downloaded >= MAX_MOVIES_TOTAL or (time.time() - start_time) > 25000:
+    p_num = 1
+    while True:
+        if (time.time() - start_time) > 25000:
             break
             
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
@@ -274,20 +312,18 @@ def run_bot():
             if not page_movie_links:
                 break
                 
-            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly 1 by 1...", flush=True)
+            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing sequentially 1 by 1...", flush=True)
             
-            # 💡 ONE BY ONE STRICT PIPELINE: Pick 1 movie -> Download -> Upload -> Sync -> Then next movie!
             for m_url in page_movie_links:
-                if total_downloaded >= MAX_MOVIES_TOTAL:
-                    break
                 process_single_content(m_url)
-                total_downloaded += 1
                 
         except Exception as e:
             print(f"⚠️ [BOT {BOT_ID}] Error scanning page {p_num}: {e}", flush=True)
             break
+            
+        p_num += 1
 
-    print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE! Total processed: {total_downloaded}", flush=True)
+    print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE!", flush=True)
 
 if __name__ == "__main__":
     run_bot()
