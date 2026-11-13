@@ -48,7 +48,6 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
-# 💡 NAYA SUPER CLEANER: Ab "Hindi Movie" aur "Free" bhi saaf karega
 def clean_title_for_tmdb(raw_title):
     if "Catalog" in raw_title or "Latest Bollywood" in raw_title or "FilmyZilla" in raw_title:
         return None
@@ -56,31 +55,25 @@ def clean_title_for_tmdb(raw_title):
     clean = raw_title
     clean = re.sub(r'(?i)Bollywood Hindi Movie.*', '', clean)
     clean = re.sub(r'(?i)Hollywood Hindi Movie.*', '', clean)
-    clean = re.sub(r'(?i)Hindi Movie.*', '', clean) # Website ka naya tag remove
+    clean = re.sub(r'(?i)Hindi Movie.*', '', clean) 
     clean = re.sub(r'(?i)South Hindi Dubbed.*', '', clean)
     clean = re.sub(r'(?i)HQCam Movie.*', '', clean)
     clean = re.sub(r'(?i)in HD Filmyzilla.*', '', clean)
     clean = re.sub(r'(?i)Filmyzilla', '', clean)
     clean = re.sub(r'(?i)Hindi Dubbed.*', '', clean)
     clean = re.sub(r'(?i)\bDownload\b', '', clean)
-    clean = re.sub(r'(?i)\bFree\b', '', clean) # Naya "Free" lafz remove
+    clean = re.sub(r'(?i)\bFree\b', '', clean) 
     clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|webrip|1080p|720p|480p|hevc|esub|dual audio|web series).*', '', clean)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
+# 💡 MEMORY WIPE: Bot hamesha Page 1 se Fresh start karega, pichli failures bhool jayega
 def get_bot_state():
-    try:
-        res = requests.get(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", timeout=5)
-        if res.status_code == 200 and res.json():
-            return res.json().get("last_visited_pages", [])
-    except: pass
-    return []
+    return [] 
 
 def save_bot_state(visited_pages):
-    try:
-        requests.put(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", json={"last_visited_pages": list(visited_pages)[-200:]}) 
-    except: pass
+    pass # Ab history save karne ki zaroorat nahi kyunke 500 limit set hai
 
 def is_valid_movie_url(url):
     low = url.lower()
@@ -113,8 +106,9 @@ def get_strict_movies_for_bot():
             for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
                 link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
                 if is_valid_movie_url(link):
-                    movie_links.add(link)
-                    found_any = True
+                    if link not in movie_links:
+                        movie_links.add(link)
+                        found_any = True
             
             visited_pages.add(p_url)
             if not found_any: 
@@ -124,7 +118,6 @@ def get_strict_movies_for_bot():
             print(f"❌ [BOT {BOT_ID}] Error scanning page {p_num}: {e}", flush=True)
             break
 
-    save_bot_state(visited_pages)
     return list(movie_links)
 
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
@@ -172,23 +165,44 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     except:
         return False
 
-# 💡 NAYA SMART SERVER HUNTER: Servers ke hidden links directly pakrega
+# 💡 AGGRESSIVE SERVER HUNTER: Ab yeh koi bhi valid link chhorega nahi!
 def get_server_links(res_page_url):
     try:
         resp = session.get(res_page_url, timeout=15)
         servers = []
-        for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE):
+        for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', resp.text, re.IGNORECASE | re.DOTALL):
             link = urllib.parse.urljoin(BASE_DOMAIN, match.group(1))
-            text = match.group(2).lower()
             
-            # Direct hidden download links ko track karega
-            if "/download/" in link.lower() or "server" in text or "download" in text:
+            # HTML tags hata kar sirf text extract karega
+            text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
+            low_link = link.lower()
+            
+            # Navigation aur faltu links ko filter karega
+            if low_link == BASE_DOMAIN.lower() or low_link == BASE_DOMAIN.lower() + "/": continue
+            ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram"]
+            if any(k in low_link for k in ignore_keywords): continue
+            
+            # Agar text mein kaam ka lafz ho YA link external ho toh usay server maan lega
+            if any(x in text for x in ["server", "download", "file", "click", "here", "link", "now", "hd"]):
+                servers.append((text, link))
+            elif not low_link.startswith(BASE_DOMAIN.lower()): 
+                servers.append((text, link)) # External links are usually direct servers
+            elif "/download/" in low_link or "/server/" in low_link or "dl" in low_link:
                 servers.append((text, link))
         
+        # Unique servers (takae duplicate try na kare)
+        unique_servers = []
+        seen_links = set()
+        for t, l in servers:
+            if l not in seen_links:
+                unique_servers.append((t, l))
+                seen_links.add(l)
+
+        # Server 3 aur 4 ko hamesha priority dega
         priority_servers = []
         other_servers = []
-        for text, link in servers:
-            if "server 3" in text or "server 4" in text or "server-3" in link or "server-4" in link:
+        for text, link in unique_servers:
+            if "3" in text or "4" in text or "server-3" in link or "server-4" in link:
                 priority_servers.append(link)
             else:
                 other_servers.append(link)
@@ -299,16 +313,21 @@ def process_single_content(m_url):
         "is_series": False
     }
 
+    servers_found_any = False
     for res_label, res_page_url in unique_res_pages.items():
-        print(f"📥 [BOT {BOT_ID}] ENTERING {res_label} PAGE: {t_name}...", flush=True)
+        print(f"📥 [BOT {BOT_ID}] ENTERING {res_label} PAGE: {t_name[:30]}...", flush=True)
         server_links = get_server_links(res_page_url)
         
         if server_links:
+            servers_found_any = True
             f_path = hit_and_trial_download(server_links, wd, res_page_url, BOT_ID, res_label, meta['title'])
             if f_path: 
                 upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
         else:
             print(f"⚠️ [BOT {BOT_ID}] No servers found on {res_label} page.", flush=True)
+            
+    if not servers_found_any:
+        print(f"❌ [BOT {BOT_ID}] All resolutions failed for '{clean_name}'. Moving to next.", flush=True)
 
     shutil.rmtree(wd, ignore_errors=True)
 
