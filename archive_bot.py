@@ -30,7 +30,6 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 BOT ASSIGNED CATEGORIES (FilmyFly Structure)
 BOT_TARGETS = {
     1: "bollywood-hindi-movies/",
     2: "hollywood-hindi-movies/",
@@ -52,9 +51,7 @@ def is_valid_movie_url(url):
         return True
     return False
 
-# 💡 FETCH TMDB METADATA (Returns cleaned metadata if matched, else fallback to raw)
 def fetch_tmdb_metadata(raw_title):
-    # Extract clean movie title and year from raw page title
     clean_query = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download|Web-DL).*', '', raw_title)
     year_match = re.search(r'\((\d{4})\)|\[(\d{4})\]', clean_query)
     release_year = year_match.group(1) or year_match.group(2) if year_match else "2026"
@@ -62,14 +59,13 @@ def fetch_tmdb_metadata(raw_title):
     clean_query = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean_query)
     clean_query = re.sub(r'\(.*?\)|\[.*?\]', '', clean_query).strip()
     
-    # Query TMDB API
     search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_query)}"
     try:
         resp = requests.get(search_url, timeout=10)
         if resp.status_code == 200:
             results = resp.json().get("results", [])
             if results:
-                m = results[0] # Best match
+                m = results[0]
                 return {
                     "title": m.get("title", clean_query),
                     "overview": m.get("overview", raw_title),
@@ -80,7 +76,6 @@ def fetch_tmdb_metadata(raw_title):
     except:
         pass
         
-    # Fallback if TMDB match fails (Still download, don't skip!)
     fallback_title = clean_query.replace('-', ' ').replace('_', ' ').strip()
     if not fallback_title:
         fallback_title = "Unknown_Movie"
@@ -92,7 +87,6 @@ def fetch_tmdb_metadata(raw_title):
         "tmdb_matched": False
     }
 
-# 💡 COMPREHENSIVE SWEEP: Front Page + Next Pagination + A-Z Letters
 def get_strict_movies_for_bot():
     movie_links = set()
     category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
@@ -100,31 +94,24 @@ def get_strict_movies_for_bot():
     
     print(f"🔥 [BOT {BOT_ID}] DEEP SWEEP START: {category_slug}", flush=True)
     
-    # 1. Front Page & Pagination Sweep
     for p_num in range(1, 41):
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
         try:
-            print(f"📄 [BOT {BOT_ID}] Scanning Page {p_num}: {p_url}", flush=True)
             resp = session.get(p_url, timeout=15)
             if resp.status_code != 200:
                 break
-                
             found_any = False
             for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
                 href = match.group(1)
                 link = urllib.parse.urljoin(BASE_DOMAIN, href)
-                if is_valid_movie_url(link):
-                    if link not in movie_links:
-                        movie_links.add(link)
-                        found_any = True
-            
+                if is_valid_movie_url(link) and link not in movie_links:
+                    movie_links.add(link)
+                    found_any = True
             if not found_any and p_num > 1:
                 break
         except Exception:
             break
 
-    # 2. A to Z Alphabetical Sorting Sweep (A=32 to Z=57)
-    print(f"🔤 [BOT {BOT_ID}] Starting A-Z Alphabetical Index Sweep...", flush=True)
     for alphabet_id in range(32, 58):
         az_url = f"{base_cat_url}?letter={alphabet_id}"
         try:
@@ -140,7 +127,6 @@ def get_strict_movies_for_bot():
     print(f"🎯 [BOT {BOT_ID}] Total Unique Movies Collected: {len(movie_links)}", flush=True)
     return list(movie_links)
 
-# 💡 UPLOAD WITH PERSISTENT RETRY
 def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     ext = ".mp4"
     release_year = meta.get("release_date", "2026")
@@ -242,7 +228,7 @@ def download_with_aria2(url, work_dir):
             
     return largest_file
 
-# 💡 STRICT SEQUENTIAL PROCESSING WITH TMDB HYBRID FALLBACK
+# 💡 STRICT SEQUENTIAL ITEM & RESOLUTION PIPELINE
 def process_single_content(m_url):
     try:
         m_resp = session.get(m_url, timeout=20)
@@ -254,7 +240,6 @@ def process_single_content(m_url):
     
     unique_key = abs(hash(m_url)) % (10 ** 10)
     
-    # 1. Check Database First (Skip if already fully processed)
     try:
         res_check = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
@@ -265,7 +250,6 @@ def process_single_content(m_url):
     except: 
         pass
 
-    # 2. Fetch TMDB Metadata (If matched -> clean title/poster; If not matched -> fallback raw download)
     tmdb_meta = fetch_tmdb_metadata(raw_title)
     print(f"🎬 [BOT {BOT_ID}] Processing: '{tmdb_meta['title']}' (TMDB Matched: {tmdb_meta['tmdb_matched']})", flush=True)
 
@@ -286,7 +270,7 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 3. Sequential Resolution Loop (480p -> Upload -> 720p -> Upload)
+    # 💡 ONE-BY-ONE STRICT RESOLUTION LOOP: Download 1st -> Upload completely -> Then proceed to next resolution
     for res_label, download_link in resolution_links.items():
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
