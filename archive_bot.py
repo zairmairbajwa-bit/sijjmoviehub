@@ -48,30 +48,24 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
-# 💡 LASER-FOCUSED TMDB CLEANER: Sirf Naam aur Saal pakrega!
 def clean_title_for_tmdb(raw_title):
     if "Catalog" in raw_title or "Latest Bollywood" in raw_title or "FilmyZilla" in raw_title:
         return None
         
-    # Magic Logic: Shuru se lekar saal (e.g., 2022) tak pakro, baqi aage ka sab kuch uday do!
-    # Example: "Jersey 2022 Bollywood Movie" -> "Jersey"
     match = re.search(r'^(.+?)(?:\s+[\(\[]?(19\d{2}|20\d{2})[\)\]]?)', raw_title)
-    
     if match:
         clean = match.group(1).strip()
     else:
         clean = raw_title
         
-    # Extra safety cleaner
     clean = re.sub(r'(?i)(Bollywood Hindi Movie|Hollywood Hindi Movie|Hindi Movie|South Hindi Dubbed|HQCam Movie|in HD Filmyzilla|Filmyzilla|Hindi Dubbed|Download|Free|Bollywood).*', '', clean)
     clean = re.sub(r'(?i)(full movie|hdrip|bluray|web-dl|webrip|1080p|720p|480p|hevc|esub|dual audio|web series).*', '', clean)
     clean = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean)
     clean = re.sub(r'\(.*?\)|\[.*?\]', '', clean)
-    
     return clean.replace('-', ' ').replace('_', ' ').strip()
 
 def get_bot_state():
-    return [] # Hamesha Page 1 se Fresh start
+    return [] 
 
 def save_bot_state(visited_pages):
     pass 
@@ -93,7 +87,6 @@ def get_strict_movies_for_bot():
     
     for p_num in range(1, 51): 
         p_url = f"{base_cat_url}{p_num}.html"
-        
         if p_url in visited_pages: continue
         
         try:
@@ -116,7 +109,6 @@ def get_strict_movies_for_bot():
                 print(f"⚠️ [BOT {BOT_ID}] No movies found on Page {p_num}. End of list.", flush=True)
                 break
         except Exception as e:
-            print(f"❌ [BOT {BOT_ID}] Error scanning page {p_num}: {e}", flush=True)
             break
 
     return list(movie_links)
@@ -124,7 +116,6 @@ def get_strict_movies_for_bot():
 def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix=""):
     try:
         ext = ".mp4"
-        
         release_year = meta.get("release_date", "2026")
         safe_title = clean_filename(meta['title'])
         file_name = f"{safe_title}_{release_year}{part_suffix}_{res_label}_{tmdb_id}{ext}"
@@ -134,7 +125,7 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
         
         max_retries = 3
         for attempt in range(max_retries):
-            print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} [{res_label}] (Attempt {attempt+1}/{max_retries})...", flush=True)
+            print(f"🚀 [BOT {bot_id}] UPLOADING: {meta['title']} [{res_label}]...", flush=True)
             try:
                 r = ia.upload(
                     ident, files=[tp], 
@@ -155,9 +146,8 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
                     
                     os.remove(tp)
                     return True
-            except Exception as e:
-                print(f"❌ [BOT {bot_id}] Archive Error: {e}", flush=True)
-                time.sleep(10)
+            except Exception:
+                time.sleep(5)
                 
         try: os.remove(tp)
         except: pass
@@ -165,7 +155,6 @@ def upload_and_sync(meta, tmdb_id, ident, res_label, f_path, bot_id, part_suffix
     except:
         return False
 
-# 💡 ALL-SERVERS HUNTER & POPUP BLOCKER
 def get_server_links(res_page_url):
     try:
         resp = session.get(res_page_url, timeout=15)
@@ -175,15 +164,12 @@ def get_server_links(res_page_url):
             text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
             low_link = link.lower()
             
-            # Popup Block 1: Sirf valid web links pakrega
             if not low_link.startswith("http"): continue 
             if low_link == BASE_DOMAIN.lower() or low_link == BASE_DOMAIN.lower() + "/": continue
             
-            # Popup Block 2: Ads, VPN, aur Apps ko laat maar dega
             ignore_keywords = ["/category/", "?sort=", "/page/", "dmca", "contact", "whatsapp", "telegram", "facebook", "twitter", "instagram", "vpn", "app", "ads", "betting"]
             if any(k in low_link for k in ignore_keywords): continue
             
-            # Agar 'server', 'verified' ya 'download' lafz link mein hai, toh woh pakar lega
             is_server = False
             if "server" in text or "server" in low_link or "/verified/" in low_link:
                 is_server = True
@@ -195,14 +181,12 @@ def get_server_links(res_page_url):
             if is_server:
                 servers.append(link)
         
-        # Duplicate servers remove karega aur seedha saare links wapas bhej dega (Koi priority nahi, sabko bari bari test karega)
         unique_servers = []
         seen_links = set()
         for l in servers:
             if l not in seen_links:
                 unique_servers.append(l)
                 seen_links.add(l)
-
         return unique_servers
     except:
         return []
@@ -235,15 +219,60 @@ def download_with_aria2(url, work_dir, referer_url):
             
     return largest_file
 
+# 💡 DEEP SNIFFER BYPASS: Ab bot redirect pages (Verified) ke andar ghus kar asli link pakrega!
 def hit_and_trial_download(server_links, work_dir, referer, bot_id, res_label, title):
     for s_link in server_links:
-        print(f"🔄 [BOT {bot_id}] Trying Server: {s_link[:60]}...", flush=True) 
-        f_path = download_with_aria2(s_link, work_dir, referer)
+        print(f"🔄 [BOT {bot_id}] Trying Server: {s_link[:50]}...", flush=True) 
+        
+        actual_dl_link = s_link
+        
+        # 3 Levels Deep Check (Agar link ke andar link ho)
+        for _ in range(3):
+            try:
+                if ".mp4" in actual_dl_link.lower() or ".mkv" in actual_dl_link.lower():
+                    break # Asli movie mil gayi, aur deep mat jao
+                    
+                if "/verified/" in actual_dl_link.lower() or "/download/" in actual_dl_link.lower() or "server" in actual_dl_link.lower():
+                    s_resp = session.get(actual_dl_link, timeout=15)
+                    found_next = False
+                    
+                    # Type 1: Meta Refresh Redirect
+                    meta_match = re.search(r'url=([^"\'>]+)', s_resp.text, re.IGNORECASE)
+                    if meta_match:
+                        actual_dl_link = urllib.parse.urljoin(actual_dl_link, meta_match.group(1))
+                        found_next = True
+                        continue
+                        
+                    # Type 2: Javascript Redirect
+                    js_match = re.search(r'location\.(?:href|replace)\s*=?\s*[\'"]([^\'"]+)[\'"]', s_resp.text, re.IGNORECASE)
+                    if js_match:
+                        actual_dl_link = urllib.parse.urljoin(actual_dl_link, js_match.group(1))
+                        found_next = True
+                        continue
+
+                    # Type 3: Normal Link (A tag)
+                    matches = re.findall(r'href=["\']([^"\']+?)["\']', s_resp.text, re.IGNORECASE)
+                    for m in matches:
+                        m_low = m.lower()
+                        if ".mp4" in m_low or ".mkv" in m_low or "server" in m_low or "dl." in m_low or "/download/" in m_low:
+                            if not any(x in m_low for x in ["whatsapp", "telegram", "facebook", "vpn", "app", "category"]):
+                                actual_dl_link = urllib.parse.urljoin(actual_dl_link, m)
+                                found_next = True
+                                break
+                                
+                    if not found_next:
+                        break # Mazeed koi link nahi mila, jo hai usay try karo
+                else:
+                    break
+            except:
+                break
+            
+        f_path = download_with_aria2(actual_dl_link, work_dir, actual_dl_link)
         if f_path:
             file_size_mb = os.path.getsize(f_path) / (1024 * 1024)
             if file_size_mb > 50: 
-                print(f"🟢 [BOT {bot_id}] SUCCESS! Downloaded {file_size_mb:.2f}MB from this server.", flush=True)
-                return f_path
+                print(f"🟢 [BOT {bot_id}] SUCCESS! Downloaded {file_size_mb:.2f}MB.", flush=True)
+                return f_path # Kamyab! Agle servers ko haath nahi lagayega
             else:
                 print(f"⚠️ [BOT {bot_id}] FAKE FILE ({file_size_mb:.2f}MB). Deleting & trying next...", flush=True)
                 os.remove(f_path)
@@ -278,8 +307,8 @@ def process_single_content(m_url):
         res_check = requests.get(f"{FIREBASE_URL}/movies/{tmdb_id}.json", timeout=5)
         if res_check.status_code == 200 and res_check.json():
             data = res_check.json()
-            if data.get("url_720p") or data.get("url_1080p") or data.get("stream_url"): 
-                print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Pehle se DB mein maujood hai)", flush=True)
+            if data.get("url_720p") or data.get("stream_url"): 
+                print(f"⏭️ [BOT {BOT_ID}] PRE-CHECK SKIPPED: '{clean_name}' (Already in DB)", flush=True)
                 return 
     except: pass
 
@@ -288,23 +317,38 @@ def process_single_content(m_url):
         t_low = link_text.lower()
         h_low = href.lower()
         
+        if h_low.startswith("javascript") or h_low == BASE_DOMAIN.lower() or h_low == BASE_DOMAIN.lower() + "/": continue
+        if any(k in h_low for k in ["/category/", "?sort=", "whatsapp", "telegram"]): continue
+
         res = None
-        if "1080p" in t_low or "1080p" in h_low: res = "1080p"
-        elif "720p" in t_low or "720p" in h_low: res = "720p"
-        elif "480p" in t_low or "300mb" in t_low or "480p" in h_low: res = "480p"
+        # 💡 FIX: "1080p" seedha Skip! Aur Agar resolution na likhi ho toh usay 480p maan kar pakar lo!
+        if "1080p" in t_low or "1080" in h_low: 
+            continue 
+        elif "720p" in t_low or "720" in h_low: 
+            res = "720p"
+        elif "480p" in t_low or "300mb" in t_low or "480" in h_low or "300mb" in h_low: 
+            res = "480p"
+        elif "download mp4" in t_low or "download full movie" in t_low or "/download/" in h_low: 
+            res = "480p" # Fallback resolution
         
-        if res and (".html" in h_low or "/movie/" in h_low):
+        if res and (".html" in h_low or "/movie/" in h_low or "/download/" in h_low or "/server/" in h_low):
             full_link = urllib.parse.urljoin(BASE_DOMAIN, href)
-            resolution_pages.append((res, full_link))
+            if full_link != m_url: 
+                resolution_pages.append((res, full_link))
 
     unique_res_pages = {}
     for res, link in resolution_pages:
         if res not in unique_res_pages:
             unique_res_pages[res] = link
             
+    # 💡 FIX: Agar koi bhi page nahi mila, toh ho sakta hai servers issi page par hon!
     if not unique_res_pages: 
-        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download page nahi mila)", flush=True)
-        return
+        direct_servers = get_server_links(m_url)
+        if direct_servers:
+             unique_res_pages["480p"] = m_url
+        else:
+            print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download page nahi mila)", flush=True)
+            return
 
     wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
     os.makedirs(wd, exist_ok=True)
@@ -325,19 +369,23 @@ def process_single_content(m_url):
     for res_label, res_page_url in unique_res_pages.items():
         print(f"📥 [BOT {BOT_ID}] ENTERING {res_label} PAGE: {t_name[:30]}...", flush=True)
         
-        # Yeh saare servers layega popups ko ignore kar ke
         server_links = get_server_links(res_page_url)
-        
+        if not server_links and res_page_url == m_url:
+             server_links = [res_page_url]
+
         if server_links:
             servers_found_any = True
             f_path = hit_and_trial_download(server_links, wd, res_page_url, BOT_ID, res_label, meta['title'])
             if f_path: 
-                upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
+                upload_success = upload_and_sync(meta, tmdb_id, ident, res_label, f_path, BOT_ID)
+                if upload_success:
+                    print(f"🎉 [BOT {BOT_ID}] Movie Secured! Skipping other servers/resolutions to save time.", flush=True)
+                    break # 💡 FIX: "Jesay hi movie mili, baqi sab chhor de!" Seedha agli movie par jump!
         else:
             print(f"⚠️ [BOT {BOT_ID}] No valid servers found on {res_label} page.", flush=True)
             
     if not servers_found_any:
-        print(f"❌ [BOT {BOT_ID}] All resolutions failed for '{clean_name}'. Moving to next.", flush=True)
+        print(f"❌ [BOT {BOT_ID}] All resolutions failed for '{clean_name}'.", flush=True)
 
     shutil.rmtree(wd, ignore_errors=True)
 
