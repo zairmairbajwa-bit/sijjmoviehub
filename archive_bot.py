@@ -17,8 +17,6 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-MAX_MOVIES_TOTAL = 500
-
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -218,11 +216,11 @@ def process_single_content(m_url):
         "is_series": False
     }
 
-    # 💡 STRICT SEQUENTIAL BLOCK: 480p must fully download, upload, and sync BEFORE 720p even starts!
+    # 💡 ABSOLUTELY ISOLATED RESOLUTION PIPELINE: 480p fully downloads, uploads, and syncs FIRST!
     for res_label in ["480p", "720p"]:
         if res_label not in resolution_links:
             continue
-        
+            
         download_link = resolution_links[res_label]
         print(f"📥 [BOT {BOT_ID}] DOWNLOADING {res_label}: {tmdb_meta['title']}...", flush=True)
         
@@ -238,8 +236,7 @@ def process_single_content(m_url):
                 try: os.remove(f_path)
                 except: pass
         
-        # 💡 Force a small breathing pause between resolutions
-        time.sleep(2)
+        time.sleep(3)
 
     shutil.rmtree(wd, ignore_errors=True)
     return True
@@ -249,11 +246,10 @@ def run_bot():
     base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
     
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
-    total_downloaded = 0
     start_time = time.time()
     
-    for p_num in range(1, 41):
-        if total_downloaded >= MAX_MOVIES_TOTAL or (time.time() - start_time) > 25000:
+    for p_num in range(1, 100):
+        if (time.time() - start_time) > 25000:
             break
             
         p_url = base_cat_url if p_num == 1 else f"{base_cat_url}page/{p_num}/"
@@ -274,19 +270,17 @@ def run_bot():
             if not page_movie_links:
                 break
                 
-            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly one by one...", flush=True)
+            print(f"🎯 [BOT {BOT_ID}] Found {len(page_movie_links)} movies on Page {p_num}. Processing strictly 1 by 1...", flush=True)
             
+            # 💡 ONE BY ONE STRICT PIPELINE WITHOUT ANY LIMITS
             for m_url in page_movie_links:
-                if total_downloaded >= MAX_MOVIES_TOTAL:
-                    break
                 process_single_content(m_url)
-                total_downloaded += 1
                 
         except Exception as e:
             print(f"⚠️ [BOT {BOT_ID}] Error scanning page {p_num}: {e}", flush=True)
             break
 
-    print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE! Total processed: {total_downloaded}", flush=True)
+    print(f"🏁 [BOT {BOT_ID}] BOT RUN COMPLETE!", flush=True)
 
 if __name__ == "__main__":
     run_bot()
