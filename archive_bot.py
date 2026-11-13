@@ -22,7 +22,7 @@ actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-# 💡 YAHAN 500 KI LIMIT LAG GAYI HAI TAQAY BOT 6 GHANTE NON-STOP CHALE
+# 💡 500 MOVIE LIMIT & 1-BY-1 DOWNLOAD (Storage ka masla khatam)
 MAX_MOVIES_PER_RUN = 500
 MAX_CONCURRENT_TASKS = 1 
 
@@ -48,10 +48,9 @@ def clean_filename(name):
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return re.sub(r'_+', '_', cleaned).strip('_')
 
-# 💡 SUPER TITLE CLEANER: TMDB MISMATCH KO KHATAM KARNE KE LIYE
 def clean_title_for_tmdb(raw_title):
     # Faltu menu tags aur catalog pages ko completely skip karega
-    if "Catalog &raquo;" in raw_title or "Latest Bollywood" in raw_title:
+    if "Catalog" in raw_title or "Latest Bollywood" in raw_title:
         return None
         
     clean = raw_title
@@ -83,19 +82,35 @@ def save_bot_state(visited_pages):
         requests.put(f"{FIREBASE_URL}/bot_state/bot_{BOT_ID}.json", json={"last_visited_pages": list(visited_pages)[-200:]}) 
     except: pass
 
+# 💡 SMART URL VALIDATOR (Ab asli movies skip nahi hongi!)
 def is_valid_movie_url(url):
-    low = url.lower()
+    low = url.lower().rstrip('/') # Aakhir ka slash hata diya taake match easy ho
+    
+    # In patterns walay links ko humesha ignore karega
     ignored_patterns = [
         "/page/", "?sort=", "/category/", "wp-content", "wp-admin", 
         "tag/", "genre/", "year/", "dmca", "contact", "privacy", 
-        "login", "signup", "sitemap", "bollywood-hindi-movies", 
-        "hollywood-hindi-movies", "south-hindi-dubbed-movie", "punjabi-movies", 
-        "animation-movies", "web-series", "imdb-top-movies"
+        "login", "signup", "sitemap"
     ]
     for p in ignored_patterns:
         if p in low:
             return False
-    return low.startswith(BASE_DOMAIN) and low != BASE_DOMAIN and low != f"{BASE_DOMAIN}/"
+            
+    # Sirf un links ko reject karega jo EXACT category ke menu links hain
+    exact_ignores = [
+        BASE_DOMAIN,
+        f"{BASE_DOMAIN}/imdb-top-movies", 
+        f"{BASE_DOMAIN}/bollywood-hindi-movies",
+        f"{BASE_DOMAIN}/hollywood-hindi-movies", 
+        f"{BASE_DOMAIN}/punjabi-movies",
+        f"{BASE_DOMAIN}/south-hindi-dubbed-movie", 
+        f"{BASE_DOMAIN}/web-series",
+        f"{BASE_DOMAIN}/animation-movies"
+    ]
+    if low in exact_ignores:
+        return False
+        
+    return low.startswith(BASE_DOMAIN)
 
 def get_strict_movies_for_bot():
     movie_links = set()
@@ -252,7 +267,9 @@ def process_single_content(m_url):
     raw_title = title_match.group(1) if title_match else ""
     
     clean_name = clean_title_for_tmdb(raw_title)
-    if not clean_name: return # Useless catalog pages yahan filter ho jayenge
+    if not clean_name: 
+        print(f"⏭️ [BOT {BOT_ID}] FALTU PAGE SKIPPED: {raw_title[:30]}...", flush=True)
+        return
 
     is_series = BOT_ID == 6 or "series" in raw_title.lower() or "season" in raw_title.lower()
     search_type = "tv" if is_series else "multi"
@@ -261,7 +278,7 @@ def process_single_content(m_url):
     try:
         t_res = requests.get(url_tmdb, timeout=10).json().get("results", [])
         if not t_res: 
-            print(f"❌ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (TMDB par nahi mili)", flush=True)
+            print(f"❌ [BOT {BOT_ID}] TMDB NOT FOUND SKIPPED: '{clean_name}'", flush=True)
             return
         tmdb_data = t_res[0]
     except: return
@@ -299,7 +316,9 @@ def process_single_content(m_url):
         final_download_queue.append((res, link, suffix))
         res_counters[res] += 1
     
+    # 💡 Yeh wala print wapas add kiya gaya hai taake missing links ka pata chal sake
     if not final_download_queue: 
+        print(f"⚠️ [BOT {BOT_ID}] SKIPPED: '{clean_name}' (Download link page par nahi mila)", flush=True)
         return
 
     wd = f"/tmp/sijj_{BOT_ID}_{tmdb_id}"
