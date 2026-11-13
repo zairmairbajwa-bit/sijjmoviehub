@@ -7,7 +7,7 @@ import requests
 import subprocess
 import internetarchive as ia
 import shutil
-import hashlib  # 💡 NEW: Fix for permanent IDs!
+import hashlib
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
@@ -173,12 +173,6 @@ def resolve_actual_download_link(url):
             new_link = urllib.parse.urljoin(current_url, js_match.group(1))
             print(f"🎯 JS Redirect Found: {new_link[:60]}...", flush=True)
             return new_link
-
-        for match in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
-            href = match.group(1)
-            if href.startswith("http") and "filmy-hd.online" not in href.lower() and not any(skip in href.lower() for skip in ["whatsapp", "telegram", "facebook", "twitter"]):
-                print(f"🎯 External Button Link Found: {href[:60]}...", flush=True)
-                return href
                 
         return current_url
     except Exception as e:
@@ -223,7 +217,7 @@ def process_single_content(m_url):
     title_match = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = title_match.group(1) if title_match else "Movie"
     
-    # 💡 THE FIX: Permanent deterministic ID generation using MD5!
+    # 💡 THE ONLY CHANGE: Yahan permanent ID ban rahi hai jo kabhi change nahi hogi!
     unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
