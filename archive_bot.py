@@ -2,13 +2,16 @@ import os, time, json, re, urllib.parse, requests, subprocess, shutil, hashlib, 
 import internetarchive as ia
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
-FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip()
+
+# 💡 FIX: Auto-correct Firebase URL format
+FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip().rstrip('/')
+if FIREBASE_URL and not FIREBASE_URL.startswith("http"):
+    FIREBASE_URL = f"https://{FIREBASE_URL}"
+
 FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
 BASE_DOMAIN = "https://filmy-hd.online"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
-
-# 7 Accounts Formula
 actual_bot_account_id = ((BOT_ID - 1) % 7) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
@@ -41,7 +44,6 @@ def fetch_tmdb_metadata(raw_title):
     clean_query = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download|Web-DL|Panjabi Movie|Punjabi Movie|South Hindi Dubbed|Web Series|Season \d+|Episode \d+).*', '', raw_title)
     year_match = re.search(r'\((\d{4})\)|\[(\d{4})\]', clean_query)
     release_year = year_match.group(1) or year_match.group(2) if year_match else "2026"
-    
     clean_query = re.sub(r'\(\d{4}\)|\[\d{4}\]', '', clean_query)
     clean_query = re.sub(r'\(.*?\)|\[.*?\]', '', clean_query).replace('-', ' ').replace('_', ' ').strip()
     
@@ -61,7 +63,6 @@ def fetch_tmdb_metadata(raw_title):
                         "is_series": m.get("media_type") == "tv"
                     }
     except: pass
-    
     return {"title": clean_query or "Unknown_Movie", "overview": raw_title, "release_date": release_year, "poster": "", "tmdb_matched": False, "is_series": False}
 
 def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
@@ -70,29 +71,43 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     tp = os.path.join(os.path.dirname(f_path), file_name)
     if f_path != tp: shutil.move(f_path, tp)
     
+    upload_success = False
+    link = ""
+    
+    # 💡 FIX: Archive uploading alag kar di gayi hai, ab fail hone par bar bar upload nahi karega!
     for attempt in range(1, 5):
-        print(f"🚀 [BOT {bot_id}] UPLOADING (Attempt {attempt}/4): {meta['title']} [{res_label}]...", flush=True)
+        print(f"🚀 [BOT {bot_id}] UPLOADING to Archive (Attempt {attempt}/4): {meta['title']} [{res_label}]...", flush=True)
         try:
             r = ia.upload(ident, files=[tp], metadata={"title": f"{meta['title']} ({meta.get('release_date', '2026')})", "mediatype": "movies"}, access_key=IA_ACCESS, secret_key=IA_SECRET)
             if r and r[0].status_code == 200:
-                print(f"✅ [BOT {bot_id}] UPLOAD SUCCESS! Saving to Database...", flush=True)
+                print(f"✅ [BOT {bot_id}] ARCHIVE UPLOAD SUCCESS!", flush=True)
+                upload_success = True
                 link = f"https://archive.org/download/{ident}/{file_name}"
-                meta[f"url_{res_label}"] = link
-                meta["stream_url"] = link 
-                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}", data=json.dumps({f"url_{res_label}": link, "stream_url": link}), timeout=15)
-                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}", data=json.dumps(meta), timeout=15)
-                try: os.remove(tp)
-                except: pass
-                time.sleep(5)
-                return True
+                break
         except Exception as e:
-            print(f"⚠️ [BOT {bot_id}] Upload error. Retrying in 60s...", flush=True)
+            print(f"⚠️ [BOT {bot_id}] Archive upload error: {e}. Retrying in 60s...", flush=True)
             time.sleep(60)
             
-    print(f"❌ [BOT {bot_id}] Upload failed after 4 attempts. Skipping.", flush=True)
-    try: os.remove(tp)
-    except: pass
-    return False
+    if upload_success:
+        print(f"💾 [BOT {bot_id}] Saving links to Firebase Database...", flush=True)
+        try:
+            meta[f"url_{res_label}"] = link
+            meta["stream_url"] = link 
+            db_url = f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}"
+            requests.patch(db_url, json={f"url_{res_label}": link, "stream_url": link}, timeout=15)
+            requests.patch(db_url, json=meta, timeout=15)
+            print(f"✅ [BOT {bot_id}] DATABASE SAVED SUCCESSFULLY!", flush=True)
+        except Exception as e:
+            print(f"❌ [BOT {bot_id}] Firebase Save Error (Lekin Upload Bach Gaya): {e}", flush=True)
+            
+        try: os.remove(tp)
+        except: pass
+        return True
+    else:
+        print(f"❌ [BOT {bot_id}] Upload failed after 4 attempts. Skipping.", flush=True)
+        try: os.remove(tp)
+        except: pass
+        return False
 
 def get_resolution_links(url):
     try:
@@ -122,7 +137,6 @@ def download_with_aria2(url, work_dir, ref):
     ]
     try: subprocess.run(cmd, check=True, timeout=7200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except: pass 
-    
     max_size, largest = -1, None
     for r, d, f in os.walk(work_dir):
         for file in f:
@@ -140,16 +154,21 @@ def process_single_content(m_url):
     
     raw_title = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = raw_title.group(1) if raw_title else "Movie"
-    # 💡 ID HAMESHA URL SE BANEGI (TMDB mismatch ka is par koi asar nahi hoga)
     unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
+    # 💡 FIX: Firebase checking ko strong kar diya gaya hai error printing ke sath
     try:
-        # 💡 FIX: Firebase checking mein bhi auth (Secret Key) add kar di gayi hai!
-        chk = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}", timeout=5)
-        if chk.status_code == 200 and chk.json() and any(k in chk.json() for k in ["url_480p", "url_720p", "stream_url"]):
-            print(f"⏭️ [BOT {BOT_ID}] SKIP: '{raw_title[:40]}' - (Pehle se Database mein mojood hai)", flush=True)
-            return True
-    except: pass
+        db_url = f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}"
+        chk = requests.get(db_url, timeout=10)
+        if chk.status_code == 200:
+            data = chk.json()
+            if data and any(k in data for k in ["url_480p", "url_720p", "stream_url"]):
+                print(f"⏭️ [BOT {BOT_ID}] SKIP: '{raw_title[:40]}' - (Pehle se Database mein mojood hai)", flush=True)
+                return True
+        else:
+            print(f"⚠️ [BOT {BOT_ID}] Firebase DB Read Warning: HTTP {chk.status_code}", flush=True)
+    except Exception as e: 
+        print(f"❌ [BOT {BOT_ID}] Firebase Check Failed: {e}", flush=True)
 
     meta = fetch_tmdb_metadata(raw_title)
     res_links = get_resolution_links(m_url)
@@ -207,9 +226,7 @@ def run_bot():
                 print(f"🏁 [BOT {BOT_ID}] No more movies found. Finishing.", flush=True)
                 break
             
-            # 💡 YAHAN BOT BATAYEGA KE USNE PAGE PAR KITNI MOVIES DEKHI HAIN
             print(f"🎯 [BOT {BOT_ID}] Found {len(links)} movies on Page {p_num}. Checking database...", flush=True)
-            
             for l in links: process_single_content(l)
         except Exception as e: 
             print(f"⚠️ [BOT {BOT_ID}] Page error: {e}", flush=True)
