@@ -3,7 +3,7 @@ name: SijjMoviesHub Auto Bots
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'  # Har 30 minute baad auto chalega (Aap isay marzi se change kar sakte hain)
+    - cron: '*/30 * * * *'
 
 jobs:
   run-bots:
@@ -30,6 +30,7 @@ jobs:
 
       - name: Run Bot ${{ matrix.bot_id }}
         env:
+          PYTHONUNBUFFERED: 1
           BOT_ID: ${{ matrix.bot_id }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
