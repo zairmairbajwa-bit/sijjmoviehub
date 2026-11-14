@@ -48,4 +48,4 @@ jobs:
           IA_SECRET_6: ${{ secrets.IA_SECRET_6 }}
           IA_ACCESS_7: ${{ secrets.IA_ACCESS_7 }}
           IA_SECRET_7: ${{ secrets.IA_SECRET_7 }}
-        run: python bot.py
+        run: python archive_bot.py
