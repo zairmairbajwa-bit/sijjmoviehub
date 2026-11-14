@@ -1,45 +1,39 @@
-name: SijjMoviesHub 8-Bot Cluster
+name: SijjMoviesHub Auto Bots
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/30 * * * *'  # Har 30 minute baad auto chalega (Aap isay marzi se change kar sakte hain)
 
 jobs:
   run-bots:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         bot_id: [1, 2, 3, 4, 5, 6, 7, 8]
-      fail-fast: false
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies (Aria2 with Timeout Protection)
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo rm -rf /var/lib/apt/lists/*
-          sudo timeout 30s apt-get update -qq || true
-          sudo timeout 30s apt-get install -yqq aria2 || true
+      - name: Install System Dependencies (aria2)
+        run: sudo apt-get install -y aria2
 
       - name: Install Python Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests internetarchive
+        run: pip install requests internetarchive
 
-      - name: Run Archive Bot Instance
+      - name: Run Bot ${{ matrix.bot_id }}
         env:
           BOT_ID: ${{ matrix.bot_id }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
+          FIREBASE_SECRET: ${{ secrets.FIREBASE_SECRET }}
           IA_ACCESS_1: ${{ secrets.IA_ACCESS_1 }}
           IA_SECRET_1: ${{ secrets.IA_SECRET_1 }}
           IA_ACCESS_2: ${{ secrets.IA_ACCESS_2 }}
@@ -48,4 +42,10 @@ jobs:
           IA_SECRET_3: ${{ secrets.IA_SECRET_3 }}
           IA_ACCESS_4: ${{ secrets.IA_ACCESS_4 }}
           IA_SECRET_4: ${{ secrets.IA_SECRET_4 }}
-        run: python archive_bot.py
+          IA_ACCESS_5: ${{ secrets.IA_ACCESS_5 }}
+          IA_SECRET_5: ${{ secrets.IA_SECRET_5 }}
+          IA_ACCESS_6: ${{ secrets.IA_ACCESS_6 }}
+          IA_SECRET_6: ${{ secrets.IA_SECRET_6 }}
+          IA_ACCESS_7: ${{ secrets.IA_ACCESS_7 }}
+          IA_SECRET_7: ${{ secrets.IA_SECRET_7 }}
+        run: python bot.py
