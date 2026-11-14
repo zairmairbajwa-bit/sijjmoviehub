@@ -3,22 +3,28 @@ import internetarchive as ia
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
 
-# 💡 FIX: Auto-correct Firebase URL format
-FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip().rstrip('/')
+FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip()
+FIREBASE_URL = re.sub(r'[\[\]\'"]', '', FIREBASE_URL).rstrip('/')
 if FIREBASE_URL and not FIREBASE_URL.startswith("http"):
     FIREBASE_URL = f"https://{FIREBASE_URL}"
 
 FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
-BASE_DOMAIN = "https://filmy-hd.online"
+FIREBASE_SECRET = re.sub(r'[\[\]\'"]', '', FIREBASE_SECRET)
+
+# 💡 FIX: Website ka naya URL update kar diya gaya hai!
+BASE_DOMAIN = "https://filmets.online" 
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 actual_bot_account_id = ((BOT_ID - 1) % 7) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
+# Asli Browser Headers
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent": USER_AGENT,
     "Accept": "*/*",
     "Referer": BASE_DOMAIN
 })
@@ -74,7 +80,6 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     upload_success = False
     link = ""
     
-    # 💡 FIX: Archive uploading alag kar di gayi hai, ab fail hone par bar bar upload nahi karega!
     for attempt in range(1, 5):
         print(f"🚀 [BOT {bot_id}] UPLOADING to Archive (Attempt {attempt}/4): {meta['title']} [{res_label}]...", flush=True)
         try:
@@ -98,7 +103,7 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
             requests.patch(db_url, json=meta, timeout=15)
             print(f"✅ [BOT {bot_id}] DATABASE SAVED SUCCESSFULLY!", flush=True)
         except Exception as e:
-            print(f"❌ [BOT {bot_id}] Firebase Save Error (Lekin Upload Bach Gaya): {e}", flush=True)
+            print(f"❌ [BOT {bot_id}] Firebase Save Error: {e}", flush=True)
             
         try: os.remove(tp)
         except: pass
@@ -133,10 +138,14 @@ def download_with_aria2(url, work_dir, ref):
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "8", "-s", "8", "--min-split-size=1M", 
         "-c", "--max-tries=3", "--retry-wait=2", "--connect-timeout=15", 
-        "--content-disposition-default-utf8=true", f"--header=Referer: {ref}", url
+        "--content-disposition-default-utf8=true", 
+        f"--header=Referer: {ref}",
+        f"--header=User-Agent: {USER_AGENT}", 
+        url
     ]
     try: subprocess.run(cmd, check=True, timeout=7200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except: pass 
+    
     max_size, largest = -1, None
     for r, d, f in os.walk(work_dir):
         for file in f:
@@ -156,7 +165,6 @@ def process_single_content(m_url):
     raw_title = raw_title.group(1) if raw_title else "Movie"
     unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
-    # 💡 FIX: Firebase checking ko strong kar diya gaya hai error printing ke sath
     try:
         db_url = f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}"
         chk = requests.get(db_url, timeout=10)
@@ -165,15 +173,11 @@ def process_single_content(m_url):
             if data and any(k in data for k in ["url_480p", "url_720p", "stream_url"]):
                 print(f"⏭️ [BOT {BOT_ID}] SKIP: '{raw_title[:40]}' - (Pehle se Database mein mojood hai)", flush=True)
                 return True
-        else:
-            print(f"⚠️ [BOT {BOT_ID}] Firebase DB Read Warning: HTTP {chk.status_code}", flush=True)
-    except Exception as e: 
-        print(f"❌ [BOT {BOT_ID}] Firebase Check Failed: {e}", flush=True)
+    except: pass
 
     meta = fetch_tmdb_metadata(raw_title)
     res_links = get_resolution_links(m_url)
     if not res_links: 
-        print(f"⚠️ [BOT {BOT_ID}] SKIP: '{meta['title']}' - (Download links nahi mile)", flush=True)
         return False
 
     print(f"🎬 [BOT {BOT_ID}] FOUND NEW: '{meta['title']}' - Preparing to Download...", flush=True)
@@ -208,7 +212,7 @@ def run_bot():
     b_url = f"{BASE_DOMAIN}/{cat}" if cat else f"{BASE_DOMAIN}/"
     
     wait_time = random.randint(2, 45)
-    print(f"⏳ [BOT {BOT_ID}] Starting in {wait_time} seconds to prevent block...", flush=True)
+    print(f"⏳ [BOT {BOT_ID}] Starting in {wait_time} seconds...", flush=True)
     time.sleep(wait_time)
     
     start_time, p_num = time.time(), 1
@@ -223,13 +227,11 @@ def run_bot():
                 link = urllib.parse.urljoin(BASE_DOMAIN, m.group(1))
                 if is_valid_movie_url(link) and link not in links: links.append(link)
             if not links: 
-                print(f"🏁 [BOT {BOT_ID}] No more movies found. Finishing.", flush=True)
                 break
             
             print(f"🎯 [BOT {BOT_ID}] Found {len(links)} movies on Page {p_num}. Checking database...", flush=True)
             for l in links: process_single_content(l)
         except Exception as e: 
-            print(f"⚠️ [BOT {BOT_ID}] Page error: {e}", flush=True)
             break
         p_num += 1
 
