@@ -114,7 +114,6 @@ def resolve_actual_download_link(url, ref):
     except: return url
 
 def download_with_aria2(url, work_dir, ref):
-    # ⚡ 8 Connections aur 1M min-split size (Fast + 100% Safe)
     cmd = [
         "aria2c", "--dir=" + work_dir, "--seed-time=0", 
         "-x", "8", "-s", "8", "--min-split-size=1M", 
@@ -141,10 +140,12 @@ def process_single_content(m_url):
     
     raw_title = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = raw_title.group(1) if raw_title else "Movie"
+    # 💡 ID HAMESHA URL SE BANEGI (TMDB mismatch ka is par koi asar nahi hoga)
     unique_key = int(hashlib.md5(m_url.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
-        chk = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json", timeout=5)
+        # 💡 FIX: Firebase checking mein bhi auth (Secret Key) add kar di gayi hai!
+        chk = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}", timeout=5)
         if chk.status_code == 200 and chk.json() and any(k in chk.json() for k in ["url_480p", "url_720p", "stream_url"]):
             print(f"⏭️ [BOT {BOT_ID}] SKIP: '{raw_title[:40]}' - (Pehle se Database mein mojood hai)", flush=True)
             return True
@@ -156,7 +157,7 @@ def process_single_content(m_url):
         print(f"⚠️ [BOT {BOT_ID}] SKIP: '{meta['title']}' - (Download links nahi mile)", flush=True)
         return False
 
-    print(f"🎬 [BOT {BOT_ID}] FOUND NEW: '{meta['title']}' - Preparing...", flush=True)
+    print(f"🎬 [BOT {BOT_ID}] FOUND NEW: '{meta['title']}' - Preparing to Download...", flush=True)
 
     wd = f"/tmp/sijj_{BOT_ID}_{unique_key}"
     os.makedirs(wd, exist_ok=True)
@@ -194,7 +195,7 @@ def run_bot():
     start_time, p_num = time.time(), 1
     while (time.time() - start_time) < 25000:
         p_url = b_url if p_num == 1 else f"{b_url}page/{p_num}/"
-        print(f"📄 [BOT {BOT_ID}] ====== SCANNING PAGE {p_num} ======", flush=True)
+        print(f"\n📄 [BOT {BOT_ID}] ====== SCANNING PAGE {p_num} ======", flush=True)
         try:
             resp = session.get(p_url, timeout=15)
             if resp.status_code != 200: break
@@ -205,6 +206,10 @@ def run_bot():
             if not links: 
                 print(f"🏁 [BOT {BOT_ID}] No more movies found. Finishing.", flush=True)
                 break
+            
+            # 💡 YAHAN BOT BATAYEGA KE USNE PAGE PAR KITNI MOVIES DEKHI HAIN
+            print(f"🎯 [BOT {BOT_ID}] Found {len(links)} movies on Page {p_num}. Checking database...", flush=True)
+            
             for l in links: process_single_content(l)
         except Exception as e: 
             print(f"⚠️ [BOT {BOT_ID}] Page error: {e}", flush=True)
