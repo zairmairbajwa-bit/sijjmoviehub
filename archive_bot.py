@@ -11,7 +11,6 @@ if FIREBASE_URL and not FIREBASE_URL.startswith("http"):
 FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
 FIREBASE_SECRET = re.sub(r'[\[\]\'"]', '', FIREBASE_SECRET)
 
-# 💡 Naya Website URL (filmets.online)
 BASE_DOMAIN = "https://filmets.online" 
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
@@ -19,7 +18,6 @@ actual_bot_account_id = ((BOT_ID - 1) % 7) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
-# Asli Browser Headers taake server block na kare
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 session = requests.Session()
@@ -164,9 +162,10 @@ def process_single_content(m_url):
     raw_title = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = raw_title.group(1) if raw_title else "Movie"
     
-    # 💡 FIX: ID hamesha sirf movie ke naam se banegi. Is se duplicate movie download nahi hogi!
+    # 💡 ULTIMATE FIX: Wapas kal wali (filmy-hd) ID match karwa di hai taake purani movies SKIP ho jayein!
     movie_path = urllib.parse.urlparse(m_url).path
-    unique_key = int(hashlib.md5(movie_path.encode()).hexdigest(), 16) % (10 ** 10)
+    old_matching_url = f"https://filmy-hd.online{movie_path}"
+    unique_key = int(hashlib.md5(old_matching_url.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
         db_url = f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}"
