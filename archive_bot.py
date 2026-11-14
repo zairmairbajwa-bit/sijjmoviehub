@@ -8,6 +8,7 @@ import subprocess
 import internetarchive as ia
 import shutil
 import hashlib
+import random  # 💡 NAYA FIX: Bots ki timing aage-peeche karne ke liye
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
@@ -26,10 +27,11 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
+# 💡 FIX 1: 8 Alag Alag Categories!
 BOT_TARGETS = {
     1: "bollywood-hindi-movies/",
     2: "hollywood-hindi-movies/",
-    3: "bollywood-hindi-movies/", 
+    3: "dual-audio-movies/", 
     4: "imdb-top-movies/",
     5: "punjabi-movies/",
     6: "south-hindi-dubbed-movie/",
@@ -47,11 +49,8 @@ def is_valid_movie_url(url):
         return True
     return False
 
-# 💡 SUPER SMART TMDB MATCHER (Movies + TV Shows + Name Cleaning)
 def fetch_tmdb_metadata(raw_title):
-    # Website ke kachre wale words ko saaf karna
     clean_query = re.sub(r'(?i)(Dual Audio|Hindi \+ English|Animated Movie|Animation Movie|BluRay|HD|ESub|Full Movie|Download|Web-DL|Panjabi Movie|Punjabi Movie|South Hindi Dubbed|Web Series|Season \d+|Episode \d+).*', '', raw_title)
-    
     year_match = re.search(r'\((\d{4})\)|\[(\d{4})\]', clean_query)
     release_year = year_match.group(1) or year_match.group(2) if year_match else "2026"
     
@@ -59,14 +58,12 @@ def fetch_tmdb_metadata(raw_title):
     clean_query = re.sub(r'\(.*?\)|\[.*?\]', '', clean_query)
     clean_query = clean_query.replace('-', ' ').replace('_', ' ').strip()
     
-    # TMDB Multi-Search (TV + Movie)
     search_url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={urllib.parse.quote(clean_query)}"
     try:
         resp = requests.get(search_url, timeout=10)
         if resp.status_code == 200:
             results = resp.json().get("results", [])
             for m in results:
-                # Pehla valid Movie ya TV show uthao
                 if m.get("media_type") in ["movie", "tv"]:
                     title = m.get("title") if m.get("media_type") == "movie" else m.get("name")
                     rel_date = m.get("release_date") if m.get("media_type") == "movie" else m.get("first_air_date")
@@ -99,7 +96,7 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     if f_path != tp: 
         shutil.move(f_path, tp)
     
-    max_attempts = 5
+    max_attempts = 4 # Spam block se bachne ke liye 4 retries bohat hain
     for attempt in range(1, max_attempts + 1):
         print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}/{max_attempts}): {meta['title']} [{res_label}]...", flush=True)
         try:
@@ -122,10 +119,15 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
                 
                 try: os.remove(tp)
                 except: pass
+                
+                # 💡 FIX: Upload successful hone ke baad bot thodi der saans lega taake spam tag na lage!
+                print(f"⏳ [BOT {bot_id}] Cooling down for 30 seconds...", flush=True)
+                time.sleep(30)
                 return True
         except Exception as e:
-            print(f"⚠️ [BOT {bot_id}] Upload error: {e}. Waiting 45 seconds before retry...", flush=True)
-            time.sleep(45)
+            # 💡 FIX 2: Agar block laga, toh 3 minute (180s) rukna zaroori hai!
+            print(f"⚠️ [BOT {bot_id}] Upload error (Spam/Rate Limit hit!). Waiting 3 MINUTES to cool down Archive server...", flush=True)
+            time.sleep(180)
 
     print(f"❌ [BOT {bot_id}] Upload failed after {max_attempts} attempts. Skipping {res_label} to prevent lockup.", flush=True)
     try: os.remove(tp)
@@ -235,7 +237,6 @@ def process_single_content(m_url):
     os.makedirs(wd, exist_ok=True)
     ident = f"sijjhub-media-{unique_key}-{int(time.time())}"
     
-    # 💡 NAYI CHEEZ: Ab bot "is_series" ka tag bhi khud pakrega TV shows ke liye
     meta = {
         "tmdb_id": str(unique_key), "id": str(unique_key), "title": tmdb_meta['title'], 
         "overview": tmdb_meta['overview'], "release_date": tmdb_meta['release_date'], 
@@ -276,6 +277,11 @@ def process_single_content(m_url):
 def run_bot():
     category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
     base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
+    
+    # 💡 FIX 3: Staggered start - Taake sab bots IA par ek sath dabba na bolein!
+    stagger_time = random.randint(2, 60)
+    print(f"⏳ [BOT {BOT_ID}] Waiting {stagger_time} seconds before starting to prevent Archive spam block...", flush=True)
+    time.sleep(stagger_time)
     
     print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
     start_time = time.time()
