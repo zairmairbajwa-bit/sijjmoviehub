@@ -7,7 +7,9 @@ FIREBASE_SECRET = os.getenv("FIREBASE_SECRET", "").strip()
 BASE_DOMAIN = "https://filmy-hd.online"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
-actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
+
+# 💡 MASTER FIX: Ab 7 accounts hain. (Bot 8, pehle account ko use kar lega)
+actual_bot_account_id = ((BOT_ID - 1) % 7) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
 
