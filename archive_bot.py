@@ -8,7 +8,7 @@ BASE_DOMAIN = "https://filmy-hd.online"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 
-# 💡 MASTER FIX: Ab 7 accounts hain. (Bot 8, pehle account ko use kar lega)
+# 7 Accounts Formula
 actual_bot_account_id = ((BOT_ID - 1) % 7) + 1
 IA_ACCESS = os.getenv(f"IA_ACCESS_{actual_bot_account_id}", "").strip()
 IA_SECRET = os.getenv(f"IA_SECRET_{actual_bot_account_id}", "").strip()
@@ -71,10 +71,11 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     if f_path != tp: shutil.move(f_path, tp)
     
     for attempt in range(1, 5):
-        print(f"[BOT {bot_id}] UPLOADING: {meta['title']} [{res_label}]")
+        print(f"🚀 [BOT {bot_id}] UPLOADING (Attempt {attempt}/4): {meta['title']} [{res_label}]...", flush=True)
         try:
             r = ia.upload(ident, files=[tp], metadata={"title": f"{meta['title']} ({meta.get('release_date', '2026')})", "mediatype": "movies"}, access_key=IA_ACCESS, secret_key=IA_SECRET)
             if r and r[0].status_code == 200:
+                print(f"✅ [BOT {bot_id}] UPLOAD SUCCESS! Saving to Database...", flush=True)
                 link = f"https://archive.org/download/{ident}/{file_name}"
                 meta[f"url_{res_label}"] = link
                 meta["stream_url"] = link 
@@ -82,11 +83,13 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
                 requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}", data=json.dumps(meta), timeout=15)
                 try: os.remove(tp)
                 except: pass
-                time.sleep(10)
+                time.sleep(5)
                 return True
-        except:
+        except Exception as e:
+            print(f"⚠️ [BOT {bot_id}] Upload error. Retrying in 60s...", flush=True)
             time.sleep(60)
             
+    print(f"❌ [BOT {bot_id}] Upload failed after 4 attempts. Skipping.", flush=True)
     try: os.remove(tp)
     except: pass
     return False
@@ -111,7 +114,13 @@ def resolve_actual_download_link(url, ref):
     except: return url
 
 def download_with_aria2(url, work_dir, ref):
-    cmd = ["aria2c", "--dir=" + work_dir, "--seed-time=0", "-x", "4", "-s", "4", "-c", "--max-tries=3", "--retry-wait=2", "--connect-timeout=15", "--content-disposition-default-utf8=true", f"--header=Referer: {ref}", url]
+    # ⚡ 8 Connections aur 1M min-split size (Fast + 100% Safe)
+    cmd = [
+        "aria2c", "--dir=" + work_dir, "--seed-time=0", 
+        "-x", "8", "-s", "8", "--min-split-size=1M", 
+        "-c", "--max-tries=3", "--retry-wait=2", "--connect-timeout=15", 
+        "--content-disposition-default-utf8=true", f"--header=Referer: {ref}", url
+    ]
     try: subprocess.run(cmd, check=True, timeout=7200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except: pass 
     
@@ -136,13 +145,18 @@ def process_single_content(m_url):
     
     try:
         chk = requests.get(f"{FIREBASE_URL}/movies/{unique_key}.json", timeout=5)
-        if chk.status_code == 200 and chk.json() and any(k in chk.json() for k in ["url_480p", "url_720p", "stream_url"]): 
+        if chk.status_code == 200 and chk.json() and any(k in chk.json() for k in ["url_480p", "url_720p", "stream_url"]):
+            print(f"⏭️ [BOT {BOT_ID}] SKIP: '{raw_title[:40]}' - (Pehle se Database mein mojood hai)", flush=True)
             return True
     except: pass
 
     meta = fetch_tmdb_metadata(raw_title)
     res_links = get_resolution_links(m_url)
-    if not res_links: return False
+    if not res_links: 
+        print(f"⚠️ [BOT {BOT_ID}] SKIP: '{meta['title']}' - (Download links nahi mile)", flush=True)
+        return False
+
+    print(f"🎬 [BOT {BOT_ID}] FOUND NEW: '{meta['title']}' - Preparing...", flush=True)
 
     wd = f"/tmp/sijj_{BOT_ID}_{unique_key}"
     os.makedirs(wd, exist_ok=True)
@@ -152,13 +166,19 @@ def process_single_content(m_url):
 
     for label in ["480p", "720p"]:
         if label not in res_links: continue
+        print(f"📥 [BOT {BOT_ID}] DOWNLOADING: {meta['title']} [{label}] (8x Speed)...", flush=True)
         f_path = download_with_aria2(resolve_actual_download_link(res_links[label], m_url), wd, m_url)
         if f_path:
-            if os.path.getsize(f_path) / (1024 * 1024) > 30:
+            mb_size = os.path.getsize(f_path) / (1024 * 1024)
+            if mb_size > 30:
+                print(f"🟢 [BOT {BOT_ID}] DOWNLOAD COMPLETE ({mb_size:.1f} MB) - Now Uploading...", flush=True)
                 upload_and_sync(full_meta, str(unique_key), ident, label, f_path, BOT_ID)
             else:
+                print(f"❌ [BOT {BOT_ID}] FAKE FILE: Size too small ({mb_size:.1f} MB). Deleted.", flush=True)
                 try: os.remove(f_path)
                 except: pass
+        else:
+            print(f"❌ [BOT {BOT_ID}] DOWNLOAD FAILED: {label}", flush=True)
         time.sleep(3)
     shutil.rmtree(wd, ignore_errors=True)
     return True
@@ -166,11 +186,15 @@ def process_single_content(m_url):
 def run_bot():
     cat = BOT_TARGETS.get(BOT_ID, "")
     b_url = f"{BASE_DOMAIN}/{cat}" if cat else f"{BASE_DOMAIN}/"
-    time.sleep(random.randint(2, 60))
+    
+    wait_time = random.randint(2, 45)
+    print(f"⏳ [BOT {BOT_ID}] Starting in {wait_time} seconds to prevent block...", flush=True)
+    time.sleep(wait_time)
     
     start_time, p_num = time.time(), 1
     while (time.time() - start_time) < 25000:
         p_url = b_url if p_num == 1 else f"{b_url}page/{p_num}/"
+        print(f"📄 [BOT {BOT_ID}] ====== SCANNING PAGE {p_num} ======", flush=True)
         try:
             resp = session.get(p_url, timeout=15)
             if resp.status_code != 200: break
@@ -178,9 +202,13 @@ def run_bot():
             for m in re.finditer(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', resp.text, re.IGNORECASE):
                 link = urllib.parse.urljoin(BASE_DOMAIN, m.group(1))
                 if is_valid_movie_url(link) and link not in links: links.append(link)
-            if not links: break
+            if not links: 
+                print(f"🏁 [BOT {BOT_ID}] No more movies found. Finishing.", flush=True)
+                break
             for l in links: process_single_content(l)
-        except: break
+        except Exception as e: 
+            print(f"⚠️ [BOT {BOT_ID}] Page error: {e}", flush=True)
+            break
         p_num += 1
 
 if __name__ == "__main__":
