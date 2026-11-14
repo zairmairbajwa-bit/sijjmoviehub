@@ -69,7 +69,7 @@ def fetch_tmdb_metadata(raw_title):
     except: pass
     return {"title": clean_query or "Unknown_Movie", "overview": raw_title, "release_date": release_year, "poster": "", "tmdb_matched": False, "is_series": False}
 
-def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
+def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id, existing_titles):
     ext = ".mp4"
     file_name = f"{clean_filename(meta['title'])}_{meta.get('release_date', '2026')}_{res_label}_{unique_key}{ext}"
     tp = os.path.join(os.path.dirname(f_path), file_name)
@@ -100,6 +100,9 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
             requests.patch(db_url, json={f"url_{res_label}": link, "stream_url": link}, timeout=15)
             requests.patch(db_url, json=meta, timeout=15)
             print(f"✅ [BOT {bot_id}] DATABASE SAVED SUCCESSFULLY!", flush=True)
+            
+            # Save into memory so it doesn't download again in the same run
+            existing_titles.add(meta['title'].strip().lower())
         except Exception as e:
             print(f"❌ [BOT {bot_id}] Firebase Save Error: {e}", flush=True)
             
@@ -155,29 +158,32 @@ def download_with_aria2(url, work_dir, ref):
                 except: pass
     return largest
 
-def process_single_content(m_url):
+def process_single_content(m_url, existing_titles):
     try: m_resp = session.get(m_url, timeout=20)
     except: return
     
     raw_title = re.search(r'<title>(.*?)</title>', m_resp.text, re.IGNORECASE)
     raw_title = raw_title.group(1) if raw_title else "Movie"
     
-    # 💡 ULTIMATE FIX: Wapas kal wali (filmy-hd) ID match karwa di hai taake purani movies SKIP ho jayein!
+    meta = fetch_tmdb_metadata(raw_title)
+    clean_movie_title = meta['title'].strip().lower()
+
+    # 💡 ULTIMATE FIX: Agar MOVIE KA NAAM database mein pehle se hai toh foran Skip kar do!
+    if clean_movie_title in existing_titles:
+        print(f"⏭️ [BOT {BOT_ID}] SKIP: '{meta['title']}' - (Naam pehle se Database mein mojood hai)", flush=True)
+        return True
+
     movie_path = urllib.parse.urlparse(m_url).path
-    old_matching_url = f"https://filmy-hd.online{movie_path}"
-    unique_key = int(hashlib.md5(old_matching_url.encode()).hexdigest(), 16) % (10 ** 10)
+    unique_key = int(hashlib.md5(movie_path.encode()).hexdigest(), 16) % (10 ** 10)
     
     try:
         db_url = f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}"
         chk = requests.get(db_url, timeout=10)
-        if chk.status_code == 200:
-            data = chk.json()
-            if data and any(k in data for k in ["url_480p", "url_720p", "stream_url"]):
-                print(f"⏭️ [BOT {BOT_ID}] SKIP: '{raw_title[:40]}' - (Pehle se Database mein mojood hai)", flush=True)
-                return True
+        if chk.status_code == 200 and chk.json():
+            print(f"⏭️ [BOT {BOT_ID}] SKIP: '{meta['title']}' - (Link Database mein mojood hai)", flush=True)
+            return True
     except: pass
 
-    meta = fetch_tmdb_metadata(raw_title)
     res_links = get_resolution_links(m_url)
     if not res_links: 
         return False
@@ -198,7 +204,7 @@ def process_single_content(m_url):
             mb_size = os.path.getsize(f_path) / (1024 * 1024)
             if mb_size > 30:
                 print(f"🟢 [BOT {BOT_ID}] DOWNLOAD COMPLETE ({mb_size:.1f} MB) - Now Uploading...", flush=True)
-                upload_and_sync(full_meta, str(unique_key), ident, label, f_path, BOT_ID)
+                upload_and_sync(full_meta, str(unique_key), ident, label, f_path, BOT_ID, existing_titles)
             else:
                 print(f"❌ [BOT {BOT_ID}] FAKE FILE: Size too small ({mb_size:.1f} MB). Deleted.", flush=True)
                 try: os.remove(f_path)
@@ -217,6 +223,20 @@ def run_bot():
     print(f"⏳ [BOT {BOT_ID}] Starting in {wait_time} seconds...", flush=True)
     time.sleep(wait_time)
     
+    # 💡 NAYA SYSTEM: Bot start hote hi Firebase se saari purani movies ke naam yaad kar lega
+    existing_titles = set()
+    print(f"🔄 [BOT {BOT_ID}] Database se purani movies ke naam yaad kar raha hai...", flush=True)
+    try:
+        db_all_url = f"{FIREBASE_URL}/movies.json?auth={FIREBASE_SECRET}"
+        db_resp = requests.get(db_all_url, timeout=30)
+        if db_resp.status_code == 200 and db_resp.json():
+            for k, v in db_resp.json().items():
+                if isinstance(v, dict) and 'title' in v:
+                    existing_titles.add(v['title'].strip().lower())
+            print(f"✅ [BOT {BOT_ID}] Total {len(existing_titles)} purani movies memory mein save ho gayin!", flush=True)
+    except Exception as e:
+        print(f"⚠️ Memory save error: {e}", flush=True)
+
     start_time, p_num = time.time(), 1
     while (time.time() - start_time) < 25000:
         p_url = b_url if p_num == 1 else f"{b_url}page/{p_num}/"
@@ -232,7 +252,7 @@ def run_bot():
                 break
             
             print(f"🎯 [BOT {BOT_ID}] Found {len(links)} movies on Page {p_num}. Checking database...", flush=True)
-            for l in links: process_single_content(l)
+            for l in links: process_single_content(l, existing_titles)
         except Exception as e: 
             break
         p_num += 1
