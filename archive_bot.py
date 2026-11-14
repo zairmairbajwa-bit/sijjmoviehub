@@ -8,11 +8,14 @@ import subprocess
 import internetarchive as ia
 import shutil
 import hashlib
-import random  # 💡 NAYA FIX: Bots ki timing aage-peeche karne ke liye
+import random
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip() or "7b6a89d3dc55b3a81aa892a88c0da6b9"
 FIREBASE_URL = os.getenv("FIREBASE_URL", "").strip() or "https://sijjmoviehub-default-rtdb.firebaseio.com"
 BASE_DOMAIN = "https://filmy-hd.online"
+
+# 🔒 MASTER KEY LAGA DI GAYI HAI
+FIREBASE_SECRET = "xX7YK2SUbT5X2BI1uE5gA0oPe1euxxmjMa3WDd6i"
 
 BOT_ID = int(os.getenv("BOT_ID", "1") or "1")
 actual_bot_account_id = ((BOT_ID - 1) % 4) + 1
@@ -27,11 +30,11 @@ session.headers.update({
     "Referer": BASE_DOMAIN
 })
 
-# 💡 FIX 1: 8 Alag Alag Categories!
+# 🎯 FINAL CATEGORIES SET (Bot 3 Front Page Par Hai)
 BOT_TARGETS = {
     1: "bollywood-hindi-movies/",
     2: "hollywood-hindi-movies/",
-    3: "dual-audio-movies/", 
+    3: "",  # <--- Khali chhorne se yeh direct Home Page (Front Page) scan karega!
     4: "imdb-top-movies/",
     5: "punjabi-movies/",
     6: "south-hindi-dubbed-movie/",
@@ -96,7 +99,7 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
     if f_path != tp: 
         shutil.move(f_path, tp)
     
-    max_attempts = 4 # Spam block se bachne ke liye 4 retries bohat hain
+    max_attempts = 4
     for attempt in range(1, max_attempts + 1):
         print(f"🚀 [BOT {bot_id}] UPLOADING TO ARCHIVE (Attempt {attempt}/{max_attempts}): {meta['title']} [{res_label}]...", flush=True)
         try:
@@ -114,20 +117,19 @@ def upload_and_sync(meta, unique_key, ident, res_label, f_path, bot_id):
                 meta[db_key] = archive_link
                 meta["stream_url"] = archive_link 
                 
-                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json", data=json.dumps({db_key: archive_link, "stream_url": archive_link}), timeout=15)
-                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json", data=json.dumps(meta), timeout=15)
+                # 🔑 SECURE DATABASE WRITE
+                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}", data=json.dumps({db_key: archive_link, "stream_url": archive_link}), timeout=15)
+                requests.patch(f"{FIREBASE_URL}/movies/{unique_key}.json?auth={FIREBASE_SECRET}", data=json.dumps(meta), timeout=15)
                 
                 try: os.remove(tp)
                 except: pass
                 
-                # 💡 FIX: Upload successful hone ke baad bot thodi der saans lega taake spam tag na lage!
-                print(f"⏳ [BOT {bot_id}] Cooling down for 30 seconds...", flush=True)
-                time.sleep(30)
+                print(f"⏳ [BOT {bot_id}] Cooling down for 10 seconds...", flush=True)
+                time.sleep(10)
                 return True
         except Exception as e:
-            # 💡 FIX 2: Agar block laga, toh 3 minute (180s) rukna zaroori hai!
-            print(f"⚠️ [BOT {bot_id}] Upload error (Spam/Rate Limit hit!). Waiting 3 MINUTES to cool down Archive server...", flush=True)
-            time.sleep(180)
+            print(f"⚠️ [BOT {bot_id}] Upload error (Spam/Rate Limit hit!). Waiting 60 SECONDS to cool down...", flush=True)
+            time.sleep(60)
 
     print(f"❌ [BOT {bot_id}] Upload failed after {max_attempts} attempts. Skipping {res_label} to prevent lockup.", flush=True)
     try: os.remove(tp)
@@ -240,7 +242,7 @@ def process_single_content(m_url):
     meta = {
         "tmdb_id": str(unique_key), "id": str(unique_key), "title": tmdb_meta['title'], 
         "overview": tmdb_meta['overview'], "release_date": tmdb_meta['release_date'], 
-        "poster": tmdb_meta['poster'], "hindi_dubbed": True, "category": BOT_TARGETS.get(BOT_ID, "movies"),
+        "poster": tmdb_meta['poster'], "hindi_dubbed": True, "category": BOT_TARGETS.get(BOT_ID, "front-page"),
         "is_series": tmdb_meta['is_series']
     }
 
@@ -275,15 +277,15 @@ def process_single_content(m_url):
     return True
 
 def run_bot():
-    category_slug = BOT_TARGETS.get(BOT_ID, "bollywood-hindi-movies/")
-    base_cat_url = f"{BASE_DOMAIN}/{category_slug}"
+    category_slug = BOT_TARGETS.get(BOT_ID, "")
+    base_cat_url = f"{BASE_DOMAIN}/{category_slug}" if category_slug else f"{BASE_DOMAIN}/"
     
-    # 💡 FIX 3: Staggered start - Taake sab bots IA par ek sath dabba na bolein!
     stagger_time = random.randint(2, 60)
     print(f"⏳ [BOT {BOT_ID}] Waiting {stagger_time} seconds before starting to prevent Archive spam block...", flush=True)
     time.sleep(stagger_time)
     
-    print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {category_slug}", flush=True)
+    target_name = category_slug if category_slug else "FRONT PAGE"
+    print(f"🔥 Starting Bot ID: {BOT_ID} - Target Category: {target_name}", flush=True)
     start_time = time.time()
     
     p_num = 1
